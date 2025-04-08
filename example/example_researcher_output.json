@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "properties": {
+    "arxiv_id": { "type": "string" },
+    "title": { "type": "string" },
+    "abstract_url": { "type": "string", "format": "uri" },
+    "pdf_url": { "type": "string", "format": "uri" },
+    "html_url": { "type": ["string", "null"], "format": "uri" },
+    "authors": { "type": "array", "items": { "type": "string" } },
+    "subjects": { "type": "array", "items": { "type": "string" } },
+    "primary_subject": { "type": "string" },
+    "comments": { "type": "string" },
+    "published_date": { "type": "string", "format": "date" },
+    "source": { "type": "string" },
+    "ai_summary": { "type": "string" },
+    "ai_key_take_aways": { "type": "array", "items": { "type": "string" } },
+    "personalized_summary": { "type": "string" },
+    "why_it_matters_to_user": { "type": "string" },
+    "relevance_score": { "type": "number", "minimum": 0, "maximum": 1 },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "length_minutes": { "type": "number" }
+  }
+}
