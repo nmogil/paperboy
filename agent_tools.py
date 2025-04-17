@@ -309,16 +309,75 @@ async def analyze_article(ctx: Any, article_text: str, user_context: Any, articl
 
     # Parse and structure response
     try:
-        # Assuming response is structured as sections
-        sections = response_text.split("\n\n")
-        summary = sections[0] if len(sections) > 0 else ""
-        importance = sections[1] if len(sections) > 1 else ""
-        action = sections[2] if len(sections) > 2 else ""
+        # Clean up the response text
+        response_text = response_text.strip()
+        
+        # Try to extract sections using regex patterns
+        import re
+        
+        # Look for explicit section headers
+        summary_match = re.search(r'Summary\s*(.*?)(?=\s*Importance|\s*Recommended Action|\Z)', 
+                                 response_text, re.DOTALL | re.IGNORECASE)
+        importance_match = re.search(r'Importance\s*(.*?)(?=\s*Recommended Action|\Z)', 
+                                    response_text, re.DOTALL | re.IGNORECASE)
+        action_match = re.search(r'Recommended Action\s*(.*?)(?=\Z)', 
+                                response_text, re.DOTALL | re.IGNORECASE)
+        
+        # If we found explicit headers, use those sections
+        if summary_match and importance_match and action_match:
+            summary = summary_match.group(1).strip()
+            importance = importance_match.group(1).strip()
+            action = action_match.group(1).strip()
+        else:
+            # Fall back to splitting by double newlines
+            sections = response_text.split("\n\n")
+            
+            # Remove any section headers that might be in the text
+            cleaned_sections = []
+            for section in sections:
+                # Remove common section headers
+                cleaned = re.sub(r'^(Summary|Importance|Recommended Action):?\s*', '', 
+                                section.strip(), flags=re.IGNORECASE)
+                cleaned_sections.append(cleaned)
+            
+            # Assign sections based on position
+            summary = cleaned_sections[0] if len(cleaned_sections) > 0 else ""
+            importance = cleaned_sections[1] if len(cleaned_sections) > 1 else ""
+            action = cleaned_sections[2] if len(cleaned_sections) > 2 else ""
+            
+            # If we still don't have content, try to extract from the original text
+            if not summary and not importance and not action:
+                # Last resort: try to extract meaningful content from the original text
+                paragraphs = response_text.split("\n")
+                if len(paragraphs) >= 3:
+                    summary = paragraphs[0]
+                    importance = paragraphs[1]
+                    action = paragraphs[2]
+                elif len(paragraphs) == 2:
+                    summary = paragraphs[0]
+                    importance = paragraphs[1]
+                    action = "No specific action recommended."
+                elif len(paragraphs) == 1:
+                    summary = paragraphs[0]
+                    importance = "Importance not specified."
+                    action = "No specific action recommended."
+                else:
+                    summary = "No summary available."
+                    importance = "Importance not specified."
+                    action = "No specific action recommended."
+
+        # Clean up any remaining section headers
+        summary = re.sub(r'^(Summary|Importance|Recommended Action):?\s*', '', 
+                        summary.strip(), flags=re.IGNORECASE)
+        importance = re.sub(r'^(Summary|Importance|Recommended Action):?\s*', '', 
+                           importance.strip(), flags=re.IGNORECASE)
+        action = re.sub(r'^(Summary|Importance|Recommended Action):?\s*', '', 
+                       action.strip(), flags=re.IGNORECASE)
 
         return {
-            "summary": summary.strip(),
-            "importance": importance.strip(),
-            "recommended_action": action.strip()
+            "summary": summary,
+            "importance": importance,
+            "recommended_action": action
         }
     except Exception as e:
         logger.error(f"Failed to parse LLM response: {e}")

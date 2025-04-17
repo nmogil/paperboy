@@ -401,31 +401,45 @@ async def main():
     analyses = await analyze_ranked_articles(user_info, articles_ranked)
     
     # Print results
-    print(f"\nTop {len(articles_ranked)} Relevant Papers:")
+    print("\n" + "=" * 80)
+    print(f"TOP {len(articles_ranked)} RELEVANT PAPERS FOR {user_info['name']}")
     print("=" * 80)
+    
     for i, article in enumerate(articles_ranked, 1):
         print(f"\n{i}. {article.title}")
         print(f"   Authors: {', '.join(article.authors)}")
         print(f"   Subject: {article.subject}")
         print(f"   Relevance Score: {article.relevance_score}/100")
         print(f"   Reasoning: {article.score_reason}")
-        print(f"   URL: {article.abstract_url}")
-        print(f"   HTML URL: {article.html_url}")
-        print(f"   PDF URL: {article.pdf_url}")
+        print(f"   URLs:")
+        print(f"     - Abstract: {article.abstract_url}")
+        print(f"     - HTML: {article.html_url}")
+        print(f"     - PDF: {article.pdf_url}")
         print("-" * 80)
 
     # Print analyses
     if analyses:
-        print("\nArticle Analyses:")
+        print("\n" + "=" * 80)
+        print("ARTICLE ANALYSES")
         print("=" * 80)
-        for analysis in analyses:
-            print(f"\nArticle: {analysis.title}")
-            print(f"Summary: {analysis.summary}")
-            print(f"Importance: {analysis.importance}")
-            print(f"Recommended Action: {analysis.recommended_action}")
+        
+        for i, analysis in enumerate(analyses, 1):
+            print(f"\n{i}. {analysis.title}")
+            print(f"   Authors: {', '.join(analysis.authors)}")
+            print(f"   Subject: {analysis.subject}")
+            print(f"   Relevance Score: {analysis.relevance_score}/100")
+            print("\n   SUMMARY:")
+            print(f"   {analysis.summary}")
+            print("\n   IMPORTANCE:")
+            print(f"   {analysis.importance}")
+            print("\n   RECOMMENDED ACTION:")
+            print(f"   {analysis.recommended_action}")
             print("-" * 80)
     else:
-        print("\nNo article analyses available. This may be due to scraping issues with the arXiv website.")
+        print("\n" + "=" * 80)
+        print("NO ARTICLE ANALYSES AVAILABLE")
+        print("=" * 80)
+        print("This may be due to scraping issues with the arXiv website.")
         print("You can still access the articles directly using the URLs provided above.")
         print("=" * 80)
 
