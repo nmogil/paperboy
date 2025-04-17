@@ -1,103 +1,67 @@
 # agent_prompts.py
-from __future__ import annotations as _annotations
-import json
-from typing import List, Dict, Any
-# Import Pydantic models for type hinting and structure reference if needed
-# from agent import UserInfo, ArticleData, RankedArticle, ArticleInsights, EnrichedArticle
 
-# Note: While we could import the Pydantic models, for clarity in the prompts,
-# we will explicitly describe the expected JSON structure within the prompt strings.
+# Main system prompt for the agent
+SYSTEM_PROMPT = """
+You are a helpful AI research assistant.
 
-RANKING_PROMPT = """
-You are an AI assistant tasked with ranking scientific articles based on their relevance to a user's profile.
-Analyze the provided list of articles and the user's information, then return a ranked list.
+Given a user profile and a JSON array of articles, select and rank the 5 most relevant articles to the user's research interests.
 
-User Information:
-{user_info}
+Return your response as a valid, compact JSON array (not inside a markdown code block, no additional text or explanation).
 
-Articles to Rank:
-{articles}
+For each article, include ONLY:
+  - title (string)
+  - authors (array of strings)
+  - subject (string)
+  - reasoning (string)
+  - relevance_score (integer, 0-100)
+  - abstract_url (string)
 
-Instructions:
-1. Review each article's title, abstract (implicitly via metadata), authors, and subjects.
-2. Compare the article content and subjects against the user's job title, company, and stated goals.
-3. Assign a rank to each article, starting from 1 for the most relevant.
-4. Provide a brief justification (reason_for_ranking) for each article's rank, explaining why it is relevant (or not) to the user.
-5. Output the results as a JSON list of objects. Each object must strictly adhere to the following structure:
-   {{
-     "rank": <integer>,
-     "article": {{ <original article data as provided> }},
-     "reason_for_ranking": "<string justification>"
-   }}
+Output ONLY pure valid JSON, not markdown or any explanation text before or after.
 
-Ensure the output is a valid JSON list containing all the provided articles, each with a rank and reason.
-The 'article' field in the output must contain the *exact* same data structure and content as the corresponding article in the input list.
+Example output:
+[
+  {
+    "title": "...",
+    "authors": ["...", "..."],
+    "subject": "...",
+    "reasoning": "...",
+    "relevance_score": 93,
+    "abstract_url": "..."
+  },
+  ...
+]
+
+JSON Schema:
+[
+  {
+    "title": "string",
+    "authors": ["string", "..."],
+    "subject": "string",
+    "reasoning": "string",
+    "relevance_score": 0,
+    "abstract_url": "string"
+  },
+  ...
+]
 """
 
-INSIGHTS_PROMPT = """
-You are an AI assistant tasked with generating detailed insights for a specific scientific article, tailored to a user's profile.
+# Prompt for ranking articles with OpenAI
+RELEVANCE_SYSTEM_PROMPT = """You are an expert research curator.
+Rank the provided research papers by relevance to this user:
+Name: {name}
+Occupation/Title: {title}
+Goals: {goals}
 
-User Information:
-{user_info}
+For each paper, provide:
+1. A relevance score (1-100)
+2. Clear reasoning for why this paper matters to the user.
+3. How it might advance their stated goals.
 
-Article Data:
-{article}
+Return exactly the 5 most relevant papers, with these fields for each:
+- All source metadata fields.
+- A "relevance_score" (integer 1-100).
+- A "reasoning" (short paragraph, in English, for this user).
 
-Instructions:
-1. Thoroughly analyze the provided article data (title, abstract, subjects, etc.).
-2. Generate the following insights, keeping the user's profile (job title, company, goal) in mind:
-    * ai_summary: A concise summary of the article's main points and findings.
-    * ai_key_take_aways: A list of the most important findings or conclusions from the article.
-    * personalized_summary: A summary specifically explaining the article's content in the context of the user's interests and goals.
-    * why_it_matters_to_user: An explanation of the article's significance and potential impact on the user's work or field.
-    * relevance_score: A numerical score between 0.0 and 1.0 indicating the article's relevance to the user (0.0 = not relevant, 1.0 = highly relevant).
-    * tags: A list of relevant keywords or tags for the article.
-    * length_minutes: An estimated reading time in minutes (optional, can be null if unknown).
-3. Output the results as a single JSON object. The object must strictly adhere to the following structure:
-   {{
-     "ai_summary": "<string>",
-     "ai_key_take_aways": ["<string>", ...],
-     "personalized_summary": "<string>",
-     "why_it_matters_to_user": "<string>",
-     "relevance_score": <float between 0.0 and 1.0>,
-     "tags": ["<string>", ...],
-     "length_minutes": <integer or null>
-   }}
+Output MUST be valid JSON list. Do not explain your work outside this format."""
 
-Ensure the output is a valid JSON object matching this structure exactly.
-"""
-
-NEWSLETTER_PROMPT = """
-You are an AI assistant tasked with creating a personalized newsletter in Markdown format summarizing a list of relevant scientific articles for a user.
-
-User Information:
-{user_info}
-
-Enriched Articles (Ranked and Summarized):
-{enriched_articles}
-
-Instructions:
-1. Review the user information and the list of enriched articles provided. Each article includes its rank, original data, AI-generated summaries, key takeaways, relevance score, and personalized insights.
-2. Compose a friendly and informative newsletter addressed to the user ({user_info['first_name']}).
-3. The newsletter should highlight the key articles based on their rank and relevance.
-4. For each highlighted article, include:
-    * Title (linked to the abstract_url if possible in Markdown)
-    * Rank
-    * Personalized Summary
-    * Why it Matters to the User
-    * Key Takeaways (briefly, perhaps as bullet points)
-5. Structure the newsletter logically, perhaps starting with the highest-ranked articles.
-6. Use Markdown formatting for headings, lists, bold text, and links to enhance readability.
-7. Ensure the tone is appropriate for a professional newsletter aimed at keeping the user informed about relevant research.
-
-Output the complete newsletter content as a single Markdown string.
-"""
-
-# Helper function to format inputs for prompts if needed (optional)
-def format_articles_for_prompt(articles: List[Dict[str, Any]]) -> str:
-    """Formats a list of article dictionaries for inclusion in a prompt."""
-    return json.dumps([article for article in articles], indent=2)
-
-def format_user_info_for_prompt(user_info: Dict[str, Any]) -> str:
-    """Formats user info dictionary for inclusion in a prompt."""
-    return json.dumps(user_info, indent=2)
+# Example: use .format(**your_context) in tools!

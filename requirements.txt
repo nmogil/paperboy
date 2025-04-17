@@ -1,5 +1,5 @@
-httpx
-beautifulsoup4
+pydantic-ai
 pydantic
-pydantic-ai[openai]
+openai
 python-dotenv
+# logfire          # Uncomment to enable structured logging
