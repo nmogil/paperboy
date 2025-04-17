@@ -13,7 +13,8 @@ from pydantic import BaseModel, ValidationError, Field
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
-from agent_prompts import SYSTEM_PROMPT
+from agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
+from agent_tools import scrape_article, analyze_article
 
 # ========== SETUP LOGGING ==========
 logging.basicConfig(
@@ -48,6 +49,30 @@ class RankedArticle(BaseModel):
     abstract_url: str
     html_url: str
     pdf_url: str
+
+class ArticleAnalysis(BaseModel):
+    """Pydantic model for article analysis results"""
+    title: str
+    authors: List[str] = Field(min_items=1)
+    subject: str
+    summary: str
+    importance: str
+    recommended_action: str
+    abstract_url: str
+    html_url: str
+    pdf_url: str
+    relevance_score: int = Field(ge=0, le=100)
+    score_reason: str
+
+class BatchAnalysis(BaseModel):
+    """Pydantic model for batch analysis results"""
+    analyses: List[ArticleAnalysis]
+
+class UserContext(BaseModel):
+    """Pydantic model for user context"""
+    name: str
+    title: str
+    goals: str
 
 # ========== AGENT ==========
 article_rank_agent = Agent(
@@ -233,6 +258,85 @@ async def rank_articles(
         logger.error(f"Error running agent: {e}", exc_info=True)
         return []
 
+async def analyze_ranked_articles(
+    user_info: Dict[str, str],
+    ranked_articles: List[RankedArticle],
+    top_n: int = 5
+) -> List[ArticleAnalysis]:
+    """
+    Analyze ranked articles for a user.
+
+    Args:
+        user_info: User information (name, title, goals)
+        ranked_articles: List of ranked articles from the ranking agent
+        top_n: Number of top articles to analyze
+
+    Returns:
+        List of article analyses
+    """
+    # Limit to top N articles
+    articles_to_analyze = ranked_articles[:top_n]
+
+    # Create user context
+    user_context = UserContext(
+        name=user_info["name"],
+        title=user_info["title"],
+        goals=user_info["goals"]
+    )
+
+    # Initialize results
+    analyses = []
+    failed_articles = []
+
+    # Process each article
+    for article in articles_to_analyze:
+        try:
+            # Scrape article content
+            article_content = await scrape_article(article.html_url)
+
+            if not article_content:
+                logger.warning(f"Failed to scrape content for article: {article.title}")
+                failed_articles.append(article.title)
+                continue
+
+            # Analyze article
+            analysis_result = await analyze_article(
+                ctx=article_rank_agent,
+                article_text=article_content,
+                user_context=user_context,
+                article_metadata=article
+            )
+
+            # Create analysis object
+            analysis = ArticleAnalysis(
+                title=article.title,
+                authors=article.authors,
+                subject=article.subject,
+                summary=analysis_result["summary"],
+                importance=analysis_result["importance"],
+                recommended_action=analysis_result["recommended_action"],
+                abstract_url=article.abstract_url,
+                html_url=article.html_url,
+                pdf_url=article.pdf_url,
+                relevance_score=article.relevance_score,
+                score_reason=article.score_reason
+            )
+
+            analyses.append(analysis)
+
+        except Exception as e:
+            logger.error(f"Error analyzing article {article.title}: {e}")
+            failed_articles.append(article.title)
+            # Continue with next article
+
+    # Log summary of failed articles
+    if failed_articles:
+        logger.warning(f"Failed to analyze {len(failed_articles)} articles: {', '.join(failed_articles)}")
+    else:
+        logger.info(f"Successfully analyzed all {len(articles_to_analyze)} articles")
+
+    return analyses
+
 # ========= MAIN LOGIC =========
 async def main():
     """Run the article ranking agent with a sample user."""
@@ -293,6 +397,9 @@ async def main():
         logger.error("Failed to rank articles")
         return
     
+    # After ranking articles, analyze them
+    analyses = await analyze_ranked_articles(user_info, articles_ranked)
+    
     # Print results
     print(f"\nTop {len(articles_ranked)} Relevant Papers:")
     print("=" * 80)
@@ -306,6 +413,21 @@ async def main():
         print(f"   HTML URL: {article.html_url}")
         print(f"   PDF URL: {article.pdf_url}")
         print("-" * 80)
+
+    # Print analyses
+    if analyses:
+        print("\nArticle Analyses:")
+        print("=" * 80)
+        for analysis in analyses:
+            print(f"\nArticle: {analysis.title}")
+            print(f"Summary: {analysis.summary}")
+            print(f"Importance: {analysis.importance}")
+            print(f"Recommended Action: {analysis.recommended_action}")
+            print("-" * 80)
+    else:
+        print("\nNo article analyses available. This may be due to scraping issues with the arXiv website.")
+        print("You can still access the articles directly using the URLs provided above.")
+        print("=" * 80)
 
 if __name__ == "__main__":
     asyncio.run(main())

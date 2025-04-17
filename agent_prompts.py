@@ -71,3 +71,34 @@ Return exactly the 5 most relevant papers, with these fields for each:
 Output MUST be valid JSON list. Do not explain your work outside this format."""
 
 # Example: use .format(**your_context) in tools!
+
+ARTICLE_ANALYSIS_PROMPT = """
+Analyze the following arXiv article for a user with these goals: {goals}
+and career: {title} at {name}.
+
+Please provide a detailed analysis in exactly three sections, separated by double newlines (\\n\\n):
+
+1. Summary (2-3 paragraphs)
+2. Importance to the user's goals and career
+3. A specific action item or next step the user should consider
+
+Article title: {article_title}
+Authors: {authors}
+Subject: {subject}
+
+Article content:
+{content}
+
+IMPORTANT: Format your response EXACTLY as follows, with each section separated by double newlines:
+
+Summary
+[Your 2-3 paragraph summary here]
+
+Importance
+[Your explanation of importance here]
+
+Recommended Action
+[Your specific action item here]
+
+Do not include any additional text, headers, or formatting. Just the content of each section separated by double newlines.
+"""

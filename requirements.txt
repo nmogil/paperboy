@@ -2,4 +2,8 @@ pydantic-ai
 pydantic
 openai
 python-dotenv
+crawl4ai
+beautifulsoup4
+lxml
+aiohttp
 # logfire          # Uncomment to enable structured logging
