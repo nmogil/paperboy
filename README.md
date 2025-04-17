@@ -10,17 +10,21 @@ paperboy/
 │   ├── agent.py           # Main agent implementation
 │   ├── agent_tools.py     # Agent utility functions
 │   ├── state.py           # State management
-│   └── agent_prompts.py   # Agent prompts
+│   ├── agent_prompts.py   # Agent prompts
+│   └── __init__.py        # Package initialization
 ├── tests/                 # Test files
 │   ├── test_agent.py
-│   └── test_agent_tools.py
+│   ├── test_agent_tools.py
+│   ├── integration_test.py
+│   ├── test_state.json
+│   └── __init__.py
 ├── config/               # Configuration files
 │   ├── .env             # Environment variables
+│   ├── .env.example     # Example environment variables
 │   └── settings.py      # Application settings
 ├── data/                # Data files
 │   └── agent_state.json # Agent state persistence
 ├── notebooks/           # Jupyter notebooks
-│   └── PROTOTYPE.ipynb  # Prototype/experimental code
 └── docs/               # Documentation
 ```
 
