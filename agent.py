@@ -29,7 +29,7 @@ if not openai_api_key:
     raise RuntimeError("OPENAI_API_KEY environment variable is not set. Please add it to your .env file.")
 
 # Allow model selection via environment variable
-model_name = os.getenv("OPENAI_MODEL", "gpt-4-0125-preview")
+model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini-2025-04-14")
 logger.info(f"Model name from environment: {model_name}")
 
 llm = OpenAIModel(
@@ -43,9 +43,11 @@ class RankedArticle(BaseModel):
     title: str
     authors: List[str] = Field(min_items=1)
     subject: str
-    reasoning: str
+    score_reason: str
     relevance_score: int = Field(ge=0, le=100)
     abstract_url: str
+    html_url: str
+    pdf_url: str
 
 # ========== AGENT ==========
 article_rank_agent = Agent(
@@ -299,8 +301,10 @@ async def main():
         print(f"   Authors: {', '.join(article.authors)}")
         print(f"   Subject: {article.subject}")
         print(f"   Relevance Score: {article.relevance_score}/100")
-        print(f"   Reasoning: {article.reasoning}")
+        print(f"   Reasoning: {article.score_reason}")
         print(f"   URL: {article.abstract_url}")
+        print(f"   HTML URL: {article.html_url}")
+        print(f"   PDF URL: {article.pdf_url}")
         print("-" * 80)
 
 if __name__ == "__main__":

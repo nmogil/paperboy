@@ -12,9 +12,11 @@ For each article, include ONLY:
   - title (string)
   - authors (array of strings)
   - subject (string)
-  - reasoning (string)
+  - score_reason (string)
   - relevance_score (integer, 0-100)
   - abstract_url (string)
+  - html_url (string)
+  - pdf_url (string)
 
 Output ONLY pure valid JSON, not markdown or any explanation text before or after.
 
@@ -24,9 +26,11 @@ Example output:
     "title": "...",
     "authors": ["...", "..."],
     "subject": "...",
-    "reasoning": "...",
+    "score_reason": "...",
     "relevance_score": 93,
-    "abstract_url": "..."
+    "abstract_url": "...",
+    "html_url": "...",
+    "pdf_url": "..."
   },
   ...
 ]
@@ -37,9 +41,11 @@ JSON Schema:
     "title": "string",
     "authors": ["string", "..."],
     "subject": "string",
-    "reasoning": "string",
+    "score_reason": "string",
     "relevance_score": 0,
-    "abstract_url": "string"
+    "abstract_url": "string",
+    "html_url": "string",
+    "pdf_url": "string"
   },
   ...
 ]
