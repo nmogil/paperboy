@@ -1,5 +1,5 @@
 import pytest
-from agent_tools import analyze_article, ArticleAnalysisResult
+from src.agent_tools import analyze_article, ArticleAnalysisResult
 from pydantic import BaseModel
 
 class MockUserContext(BaseModel):

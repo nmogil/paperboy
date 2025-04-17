@@ -16,7 +16,7 @@ class AgentStateModel(BaseModel):
 class AgentState:
     """Handler for agent state persistence"""
     
-    def __init__(self, state_file: str = "agent_state.json"):
+    def __init__(self, state_file: str = "data/agent_state.json"):
         self.state_file = state_file
         self.state = AgentStateModel()
         self.load()

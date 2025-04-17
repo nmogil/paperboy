@@ -6,9 +6,9 @@ import json
 import os
 from dotenv import load_dotenv
 
-from settings import AgentSettings
-from state import AgentState
-from agent import ArticleRankAgent
+from config.settings import AgentSettings
+from src.state import AgentState
+from src.agent import ArticleRankAgent
 
 async def main():
     """Test the article ranking agent with sample data"""

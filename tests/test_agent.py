@@ -1,8 +1,8 @@
 import pytest
 import json
-from agent import ArticleRankAgent, RankedArticle
-from settings import AgentSettings
-from state import AgentState
+from src.agent import ArticleRankAgent, RankedArticle
+from config.settings import AgentSettings
+from src.state import AgentState
 from unittest.mock import AsyncMock, patch
 
 class MockAgent:

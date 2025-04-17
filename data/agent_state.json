@@ -1,0 +1,32 @@
+{
+  "last_processed_articles": {
+    "original_articles": [
+      {
+        "title": "Advanced Transformer Architectures for NLP",
+        "authors": [
+          "John Doe",
+          "Jane Smith"
+        ],
+        "subject": "cs.CL",
+        "abstract_url": "https://arxiv.org/abs/2403.12345",
+        "html_url": "https://arxiv.org/html/2403.12345",
+        "pdf_url": "https://arxiv.org/pdf/2403.12345.pdf",
+        "body": "\n            Title: Advanced Transformer Architectures for NLP\n            Authors: John Doe, Jane Smith\n            \n            Abstract:\n            This paper presents novel approaches to transformer architectures for natural language processing tasks.\n            We introduce several innovations that improve performance while reducing computational complexity.\n            \n            1. Introduction\n            Transformer architectures have revolutionized NLP since their introduction. This paper explores new\n            variations that push the boundaries of what's possible with these models.\n            \n            2. Methods\n            We present three key innovations:\n            - Adaptive attention mechanisms\n            - Sparse transformer layers\n            - Dynamic pruning techniques\n            \n            3. Results\n            Our experiments show significant improvements in both performance and efficiency.\n            \n            4. Conclusion\n            The proposed architectures represent a significant step forward in NLP capabilities.\n            "
+      },
+      {
+        "title": "Reinforcement Learning for Robotics",
+        "authors": [
+          "Alice Johnson",
+          "Bob Wilson"
+        ],
+        "subject": "cs.RO",
+        "abstract_url": "https://arxiv.org/abs/2403.12346",
+        "html_url": "https://arxiv.org/html/2403.12346",
+        "pdf_url": "https://arxiv.org/pdf/2403.12346.pdf",
+        "body": "\n            Title: Reinforcement Learning for Robotics\n            Authors: Alice Johnson, Bob Wilson\n            \n            Abstract:\n            This paper explores novel reinforcement learning approaches for robotic control systems.\n            We demonstrate improved performance in complex manipulation tasks.\n            \n            1. Introduction\n            Reinforcement learning has shown great promise in robotics, but challenges remain.\n            \n            2. Methods\n            We introduce a new algorithm that combines model-based and model-free approaches.\n            \n            3. Results\n            Our method achieves state-of-the-art performance on standard benchmarks.\n            \n            4. Conclusion\n            The proposed approach opens new possibilities for robotic learning.\n            "
+      }
+    ]
+  },
+  "user_preferences": {},
+  "session_data": {}
+}

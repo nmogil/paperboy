@@ -13,11 +13,11 @@ from pydantic import BaseModel, ValidationError, Field, validator
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
-from agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
-from agent_tools import scrape_article, analyze_article
+from src.agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
+from src.agent_tools import scrape_article, analyze_article
 
-from settings import AgentSettings
-from state import AgentState
+from config.settings import AgentSettings
+from src.state import AgentState
 
 # ========== SETUP LOGGING ==========
 logging.basicConfig(

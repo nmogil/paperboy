@@ -2,6 +2,28 @@
 
 A sophisticated AI agent that intelligently finds and ranks relevant academic papers based on user information and research interests. Built with modern Python practices and robust error handling.
 
+## Project Structure
+
+```
+paperboy/
+├── src/                    # Source code
+│   ├── agent.py           # Main agent implementation
+│   ├── agent_tools.py     # Agent utility functions
+│   ├── state.py           # State management
+│   └── agent_prompts.py   # Agent prompts
+├── tests/                 # Test files
+│   ├── test_agent.py
+│   └── test_agent_tools.py
+├── config/               # Configuration files
+│   ├── .env             # Environment variables
+│   └── settings.py      # Application settings
+├── data/                # Data files
+│   └── agent_state.json # Agent state persistence
+├── notebooks/           # Jupyter notebooks
+│   └── PROTOTYPE.ipynb  # Prototype/experimental code
+└── docs/               # Documentation
+```
+
 ## Features
 
 - **Smart Article Recommendations**
@@ -22,21 +44,6 @@ A sophisticated AI agent that intelligently finds and ranks relevant academic pa
   - Extensive test coverage
   - Clear documentation and implementation notes
   - Easy configuration through environment variables
-
-## Project Structure
-
-```
-.
-├── agent.py              # Main agent implementation
-├── agent_tools.py        # Tool definitions and implementations
-├── agent_prompts.py      # System and user prompts
-├── state.py             # State management
-├── settings.py          # Configuration settings
-├── tests/               # Test suite
-├── requirements.txt     # Project dependencies
-├── .env.example        # Example environment variables
-└── PROTOTYPE.ipynb     # Development notebook
-```
 
 ## Installation
 

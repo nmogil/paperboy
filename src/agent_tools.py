@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
-from agent_prompts import ARTICLE_ANALYSIS_PROMPT
+from src.agent_prompts import ARTICLE_ANALYSIS_PROMPT
 import random
 import re
 
