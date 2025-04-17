@@ -35,4 +35,4 @@ tasks.json
 tasks/ 
 
 .windsurfrules
-.project_resources
+# .project_resources
