@@ -71,6 +71,28 @@ This document outlines the implementation plan for a new Pydantic AI Agent that 
 - **requirements.txt:**
   - Dependencies: pydantic, crawl4ai client, requests, bs4, transformers, etc.
 
+### 7. Archon Integration
+
+- **When to Use Archon:**
+
+  - Use Archon for all Pydantic AI-specific implementations, including:
+    1. Agent class structure and configuration
+    2. Tool registration and implementation
+    3. Pydantic model definitions and validation
+    4. Prompt engineering and LLM integration
+    5. Error handling patterns specific to Pydantic AI
+
+- **Archon Implementation Flow:**
+
+  1. First, use Archon to design and implement the core Pydantic AI agent structure
+  2. Then, use Archon to implement the analysis tools and LLM integration
+  3. Finally, use Archon to refine the prompt engineering and response parsing
+
+- **Archon Input Requirements:**
+  - Provide clear requirements for Pydantic AI implementation
+  - Include examples of expected input/output formats
+  - Specify any constraints or requirements for the agent's behavior
+
 ## Detailed Implementation
 
 ### 1. Data Models (in agent.py)
@@ -539,12 +561,35 @@ The implementation above integrates with the existing agent.py by:
 
 ## Implementation Steps
 
-1. **Extend agent.py** with the new models and main analysis function
-2. **Create agent_tools.py** with the scraping and analysis tools
-3. **Create agent_prompts.py** with the analysis prompt template
-4. **Update requirements.txt** to include crawl4ai dependencies
-5. **Test the implementation** with sample articles
-6. **Refine the implementation** based on test results
+1. **Use Archon to Design Core Agent Structure**
+
+   - Create the ArticleAnalysis and BatchAnalysis Pydantic models
+   - Design the agent class structure
+   - Implement dependency injection
+   - Set up tool registration
+
+2. **Use Archon to Implement Analysis Tools**
+
+   - Implement the analyze_article tool
+   - Set up LLM integration
+   - Configure response parsing
+
+3. **Use Archon to Refine Prompt Engineering**
+
+   - Design and implement the ARTICLE_ANALYSIS_PROMPT
+   - Set up structured response parsing
+   - Implement error handling for LLM responses
+
+4. **Implement Crawl4ai Integration**
+
+   - Create the scraping tools
+   - Implement error handling and retry logic
+   - Set up batch processing
+
+5. **Test and Refine**
+   - Test with sample articles
+   - Refine the implementation based on test results
+   - Optimize performance
 
 ## References
 
