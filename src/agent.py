@@ -25,17 +25,15 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", "
 
 # ========== SETUP LOGGING ==========
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO,  # Changed from DEBUG to INFO
+    format='%(levelname)s - %(message)s'  # Simplified format
 )
 logger = logging.getLogger("article_rank_agent")
 
-# Also set crawl4ai logger to DEBUG
-logging.getLogger("crawl4ai").setLevel(logging.DEBUG)
-
-# Add OpenAI client logging
-logging.getLogger("openai").setLevel(logging.DEBUG)
-logging.getLogger("httpx").setLevel(logging.DEBUG)
+# Set other loggers to WARNING to reduce noise
+logging.getLogger("crawl4ai").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ========== MODELS ==========
 class RankedArticle(BaseModel):
@@ -89,19 +87,13 @@ class ArticleRankAgent:
         self.settings = settings
         self.state = state
         
-        # Log API key info (masked)
-        api_key = settings.openai_api_key
-        masked_key = f"{api_key[:8]}...{api_key[-4:]}" if api_key else "None"
-        logger.debug(f"Initializing OpenAI model with API key: {masked_key}")
-        logger.debug(f"Using model: {settings.openai_model}")
-        
         # Initialize OpenAI model
         try:
             self.llm = OpenAIModel(
                 settings.openai_model,
                 provider=OpenAIProvider(api_key=settings.openai_api_key)
             )
-            logger.info("Successfully initialized OpenAI model")
+            logger.info("OpenAI model initialized")
         except Exception as e:
             logger.error(f"Failed to initialize OpenAI model: {str(e)}")
             raise
@@ -113,7 +105,7 @@ class ArticleRankAgent:
                 system_prompt=SYSTEM_PROMPT,
                 retries=1
             )
-            logger.info("Successfully initialized Agent")
+            logger.info("Agent initialized")
         except Exception as e:
             logger.error(f"Failed to initialize Agent: {str(e)}")
             raise
@@ -135,13 +127,11 @@ class ArticleRankAgent:
         Returns:
             List of ranked articles
         """
-        # Store original articles in state for later use
         self.state.update_last_processed({"original_articles": articles})
         
-        # Limit articles to prevent token limit issues
         limited_articles = articles[:self.settings.max_articles]
         if len(articles) > self.settings.max_articles:
-            logger.warning(f"Only the first {self.settings.max_articles} articles will be considered for ranking")
+            logger.warning(f"Limited to first {self.settings.max_articles} articles")
         
         # Compose user message
         user_message = (
@@ -157,30 +147,13 @@ class ArticleRankAgent:
         )
         
         try:
-            logger.info(f"Running agent with model: {self.settings.openai_model}")
-            logger.debug("Making API call to OpenAI...")
-            
-            # Log the request details (without sensitive data)
-            logger.debug(f"Request details:")
-            logger.debug(f"- Model: {self.settings.openai_model}")
-            logger.debug(f"- System prompt length: {len(SYSTEM_PROMPT)} chars")
-            logger.debug(f"- User message length: {len(user_message)} chars")
-            logger.debug(f"- Number of articles: {len(limited_articles)}")
-            
             response = await self.agent.run(user_message)
-            logger.info("Successfully received response from OpenAI")
-            
-            # Parse and validate the response
             articles_ranked = self._parse_response(response)
-            logger.info(f"Successfully parsed {len(articles_ranked)} ranked articles")
-            
+            logger.info(f"Ranked {len(articles_ranked)} articles")
             return articles_ranked
             
         except Exception as e:
-            logger.error(f"Error ranking articles: {str(e)}", exc_info=True)
-            if hasattr(e, 'response'):
-                logger.error(f"Response status code: {e.response.status_code}")
-                logger.error(f"Response body: {e.response.text}")
+            logger.error(f"Error ranking articles: {str(e)}")
             return []
     
     async def analyze_ranked_articles(
@@ -201,17 +174,13 @@ class ArticleRankAgent:
             List of article analyses
         """
         try:
-            # Limit to top N articles
             articles_to_analyze = ranked_articles[:top_n]
-            
-            # Create user context object
             user_ctx = UserContext(
                 name=user_info["name"],
                 title=user_info["title"],
                 goals=user_info["goals"]
             )
             
-            # Get original articles from state
             state_data = self.state.get_last_processed()
             original_articles = state_data.get("original_articles", [])
             
@@ -219,16 +188,12 @@ class ArticleRankAgent:
                 logger.error("No original articles found in state")
                 return []
             
-            # Analyze each article
             analyses = []
-            # Create a single crawler instance for all articles
-            async with AsyncWebCrawler(verbose=False) as crawler:  # Use verbose=False for cleaner logs
-                logger.info("AsyncWebCrawler initialized for batch analysis")
+            async with AsyncWebCrawler(verbose=False) as crawler:
+                logger.info(f"Processing {len(articles_to_analyze)} articles")
                 
                 for i, article in enumerate(articles_to_analyze):
                     try:
-                        logger.info(f"Processing article {i+1}/{len(articles_to_analyze)}: {article.title}")
-                        # Create article metadata
                         metadata = {
                             "title": article.title,
                             "authors": article.authors,
@@ -237,47 +202,35 @@ class ArticleRankAgent:
                             "score_reason": article.score_reason
                         }
                         
-                        # Get article content from original articles
                         article_data = next(
                             (a for a in original_articles if a["title"] == article.title),
                             None
                         )
                         
                         if not article_data:
-                            logger.error(f"Could not find article data for: {article.title}")
+                            logger.warning(f"Article data not found: {article.title}")
                             continue
                         
-                        # Get article content - either from body field or by scraping
                         article_content = ""
-                        if "body" in article_data and article_data["body"] and len(article_data["body"]) > 50:  # Check if body has substantial content
-                            logger.debug(f"Using 'body' field content for: {article.title}")
+                        if "body" in article_data and article_data["body"] and len(article_data["body"]) > 50:
                             article_content = article_data["body"]
-                        elif article.html_url:  # Check if html_url exists
-                            logger.info(f"Scraping content for article: {article.title} from {article.html_url}")
-                            # Pass the existing crawler instance
+                        elif article.html_url:
                             article_content = await scrape_article(crawler, article.html_url)
                             
                             if not article_content:
-                                logger.error(f"Failed to scrape content for article: {article.title}")
+                                logger.warning(f"Failed to get content: {article.title}")
                                 continue
-                            else:
-                                logger.info(f"Successfully scraped content for: {article.title} ({len(article_content)} chars)")
                         else:
-                            logger.warning(f"No 'body' field or html_url for article: {article.title}. Cannot get content for analysis.")
-                            continue  # Skip analysis if no content source
+                            logger.warning(f"No content source for: {article.title}")
+                            continue
                         
-                        # Analyze content
-                        logger.debug(f"Calling analyze_article for: {article.title}")
-                        # Pass the main agent instance (self) as context for analyze_article's LLM call
                         analysis_result = await analyze_article(
-                            self.agent,  # Pass the pydantic_ai Agent instance
+                            self.agent,
                             article_content,
                             user_ctx,
                             metadata
                         )
-                        logger.debug(f"Analysis result received for: {article.title}")
                         
-                        # Create analysis object
                         analysis = ArticleAnalysis(
                             title=article.title,
                             authors=article.authors,
@@ -292,17 +245,16 @@ class ArticleRankAgent:
                             score_reason=article.score_reason
                         )
                         analyses.append(analysis)
-                        logger.info(f"Completed analysis for: {article.title}")
                         
                     except Exception as e:
-                        logger.error(f"Error analyzing article {article.title}: {e}", exc_info=True)
+                        logger.warning(f"Error analyzing {article.title}: {str(e)}")
                         continue
             
-            logger.info(f"Finished analyzing {len(analyses)} articles")
+            logger.info(f"Completed analysis of {len(analyses)} articles")
             return analyses
             
         except Exception as e:
-            logger.error(f"Error analyzing articles: {e}", exc_info=True)
+            logger.error(f"Error in batch analysis: {str(e)}")
             return []
     
     def _parse_response(self, response: Any) -> List[RankedArticle]:
@@ -316,53 +268,43 @@ class ArticleRankAgent:
             List of validated RankedArticle objects
         """
         try:
-            # Handle AgentRunResult
             if hasattr(response, 'data'):
                 data = json.loads(response.data)
-            # If response is a string, try to parse it as JSON
             elif isinstance(response, str):
-                # First try to extract JSON if it's wrapped in text/markdown
                 json_str = self._extract_json(response)
                 data = json.loads(json_str)
             else:
                 data = response
             
-            # Handle dict with 'papers' key
             if isinstance(data, dict) and 'papers' in data:
                 data = data['papers']
             
-            # Ensure data is a list
             if not isinstance(data, list):
-                logger.error(f"Expected a list of articles, got {type(data)}")
+                logger.error(f"Invalid response format: {type(data)}")
                 return []
             
-            # Log the raw data for debugging
-            logger.debug(f"Raw response data: {json.dumps(data, indent=2)}")
-            
-            # Normalize and validate each article with Pydantic
             normalized_articles = []
             for article in data:
                 try:
                     normalized = self._normalize_article_data(article)
                     normalized_articles.append(normalized)
                 except Exception as e:
-                    logger.error(f"Error normalizing article: {e}")
+                    logger.warning(f"Error normalizing article: {str(e)}")
                     continue
             
-            # Validate all articles
             validated_articles = []
             for article in normalized_articles:
                 try:
                     validated = RankedArticle.model_validate(article)
                     validated_articles.append(validated)
                 except ValidationError as e:
-                    logger.error(f"Validation error for article {article.get('title', 'Unknown')}: {e}")
+                    logger.warning(f"Validation error for {article.get('title', 'Unknown')}")
                     continue
             
             return validated_articles
             
         except Exception as e:
-            logger.error(f"Error parsing response: {e}")
+            logger.error(f"Error parsing response: {str(e)}")
             return []
     
     def _extract_json(self, output: str) -> str:
@@ -529,7 +471,7 @@ class ArticleRankAgent:
 # ========= MAIN LOGIC =========
 async def main():
     """Run the article ranking agent with a sample user."""
-    logger.info("Initializing article ranking agent...")
+    logger.info("Initializing article ranking agent")
 
     # Initialize settings and state
     settings = AgentSettings()
