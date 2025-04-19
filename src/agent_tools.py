@@ -92,11 +92,12 @@ schema_content = {
 }
 
 # ========== TOOLS ==========
-async def scrape_article(url: str) -> str:
+async def scrape_article(crawler: AsyncWebCrawler, url: str) -> str:
     """
-    Scrape article content from arXiv URL.
+    Scrape article content from arXiv URL using a provided crawler instance.
     
     Args:
+        crawler: An active AsyncWebCrawler instance
         url: The URL of the article to scrape
         
     Returns:
@@ -177,125 +178,126 @@ async def scrape_article(url: str) -> str:
     logger.debug("Configured crawler with waiting for article content")
     
     # Try to scrape the article with retries
-    max_retries = 1  # Reduced from 3 to 1 for faster testing
+    max_retries = 2  # Increased retries
     for attempt in range(max_retries):
         try:
             logger.info(f"Attempt {attempt + 1}/{max_retries} to scrape article")
-            async with AsyncWebCrawler(verbose=True) as crawler:
-                logger.debug("Created AsyncWebCrawler instance")
-                result = await crawler.arun(url=url, config=config)
-                logger.debug(f"Crawler run completed. Success: {result.success}")
-                
-                if not result.success:
-                    logger.error(f"Failed to scrape article (attempt {attempt + 1}): {result.error_message}")
-                    if attempt < max_retries - 1:
-                        logger.info(f"Waiting 2 seconds before retry {attempt + 2}")
-                        await asyncio.sleep(2)
-                        continue
-                    return ""
-                
-                if result.extracted_content:
-                    try:
-                        logger.debug("Attempting to parse extracted content as JSON")
-                        data = json.loads(result.extracted_content)
-                        content_parts = []
-                        
-                        # Handle both list and dictionary responses
-                        if isinstance(data, list):
-                            # Take the first item if it's a list
-                            data = data[0] if data else {}
-                        
-                        # Extract title
-                        if data.get("title"):
-                            logger.debug(f"Found title: {data['title'][:50]}...")
-                            content_parts.append(f"Title: {data['title'].strip()}")
-                        else:
-                            logger.warning("No title found in extracted content")
-                        
-                        # Extract authors
-                        if data.get("authors"):
-                            authors = [author.get("author_name", "") for author in data["authors"]]
-                            logger.debug(f"Found {len(authors)} authors")
-                            content_parts.append(f"Authors: {', '.join(authors)}")
-                        else:
-                            logger.warning("No authors found in extracted content")
-                        
-                        # Extract subjects
-                        if data.get("primary_subject"):
-                            content_parts.append(f"Primary Subject: {data['primary_subject'].strip()}")
-                        if data.get("keywords"):
-                            keywords = [kw.strip() for kw in data["keywords"].split(",")]
-                            content_parts.append(f"Keywords: {', '.join(keywords)}")
-                        
-                        # Extract abstract
-                        if data.get("abstract"):
-                            logger.debug("Found abstract")
-                            content_parts.extend(["", "Abstract:", data["abstract"].strip()])
-                        else:
-                            logger.warning("No abstract found in extracted content")
-                        
-                        if content_parts:
-                            logger.info(f"Successfully extracted {len(content_parts)} content parts")
-                            return "\n\n".join(content_parts)
-                        else:
-                            logger.warning("No content parts extracted from structured data")
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse extracted content as JSON: {e}")
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(2)
-                            continue
-                        return ""
-                
-                # If we have cleaned HTML but no extracted content, try to extract manually
-                elif result.cleaned_html:
-                    logger.info("Attempting manual extraction from cleaned HTML")
-                    soup = BeautifulSoup(result.cleaned_html, "html.parser")
+            result = await crawler.arun(url=url, config=config)
+            logger.debug(f"Crawler run completed. Success: {result.success}")
+            
+            if not result.success:
+                logger.error(f"Failed to scrape article (attempt {attempt + 1}): {result.error_message}")
+                if attempt < max_retries - 1:
+                    logger.info(f"Waiting 3 seconds before retry {attempt + 2}")
+                    await asyncio.sleep(3)  # Increased delay
+                    continue
+                return ""
+            
+            if result.extracted_content:
+                try:
+                    logger.debug("Attempting to parse extracted content as JSON")
+                    data = json.loads(result.extracted_content)
                     content_parts = []
                     
-                    # Extract title (try both formats)
-                    title = soup.select_one("h1.title, h1.ltx_title_document")
-                    if title:
-                        logger.debug(f"Found title manually: {title.get_text(strip=True)[:50]}...")
-                        content_parts.append(f"Title: {title.get_text(strip=True)}")
-                    else:
-                        logger.warning("No title found in manual extraction")
+                    # Handle both list and dictionary responses
+                    if isinstance(data, list):
+                        # Take the first item if it's a list
+                        data = data[0] if data else {}
                     
-                    # Extract authors (try both formats)
-                    authors = soup.select("div.authors a, div.ltx_authors span.ltx_personname")
-                    if authors:
-                        logger.debug(f"Found {len(authors)} authors manually")
-                        content_parts.append(f"Authors: {', '.join(a.get_text(strip=True) for a in authors)}")
+                    # Extract title
+                    if data.get("title"):
+                        logger.debug(f"Found title: {data['title'][:50]}...")
+                        content_parts.append(f"Title: {data['title'].strip()}")
                     else:
-                        logger.warning("No authors found in manual extraction")
+                        logger.warning("No title found in extracted content")
                     
-                    # Extract abstract (try both formats)
-                    abstract = soup.select_one("blockquote.abstract, div.ltx_abstract p.ltx_p")
-                    if abstract:
-                        logger.debug("Found abstract manually")
-                        content_parts.extend(["", "Abstract:", abstract.get_text(strip=True)])
+                    # Extract authors
+                    if data.get("authors"):
+                        authors = [author.get("author_name", "") for author in data["authors"]]
+                        logger.debug(f"Found {len(authors)} authors")
+                        content_parts.append(f"Authors: {', '.join(authors)}")
                     else:
-                        logger.warning("No abstract found in manual extraction")
+                        logger.warning("No authors found in extracted content")
+                    
+                    # Extract subjects
+                    if data.get("primary_subject"):
+                        content_parts.append(f"Primary Subject: {data['primary_subject'].strip()}")
+                    if data.get("keywords"):
+                        keywords = [kw.strip() for kw in data["keywords"].split(",")]
+                        content_parts.append(f"Keywords: {', '.join(keywords)}")
+                    
+                    # Extract abstract
+                    if data.get("abstract"):
+                        logger.debug("Found abstract")
+                        content_parts.extend(["", "Abstract:", data["abstract"].strip()])
+                    else:
+                        logger.warning("No abstract found in extracted content")
                     
                     if content_parts:
-                        logger.info(f"Successfully extracted {len(content_parts)} content parts manually")
+                        logger.info(f"Successfully extracted {len(content_parts)} content parts")
                         return "\n\n".join(content_parts)
-                    
-                    logger.warning("No content found in manual extraction")
+                    else:
+                        logger.warning("No content parts extracted from structured data")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse extracted content as JSON: {e}")
                     if attempt < max_retries - 1:
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(3)
                         continue
                     return ""
-                else:
-                    logger.error("No content extracted (neither structured nor HTML)")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(2)
-                        continue
-                    return ""
+            
+            # If we have cleaned HTML but no extracted content, try to extract manually
+            elif result.cleaned_html:
+                logger.info("Attempting manual extraction from cleaned HTML")
+                soup = BeautifulSoup(result.cleaned_html, "html.parser")
+                content_parts = []
                 
+                # Extract title (try both formats)
+                title = soup.select_one("h1.title, h1.ltx_title_document")
+                if title:
+                    logger.debug(f"Found title manually: {title.get_text(strip=True)[:50]}...")
+                    content_parts.append(f"Title: {title.get_text(strip=True)}")
+                else:
+                    logger.warning("No title found in manual extraction")
+                
+                # Extract authors (try both formats)
+                authors = soup.select("div.authors a, div.ltx_authors span.ltx_personname")
+                if authors:
+                    logger.debug(f"Found {len(authors)} authors manually")
+                    content_parts.append(f"Authors: {', '.join(a.get_text(strip=True) for a in authors)}")
+                else:
+                    logger.warning("No authors found in manual extraction")
+                
+                # Extract abstract (try both formats)
+                abstract = soup.select_one("blockquote.abstract, div.ltx_abstract p.ltx_p")
+                if abstract:
+                    logger.debug("Found abstract manually")
+                    content_parts.extend(["", "Abstract:", abstract.get_text(strip=True)])
+                else:
+                    logger.warning("No abstract found in manual extraction")
+                
+                if content_parts:
+                    logger.info(f"Successfully extracted {len(content_parts)} content parts manually")
+                    return "\n\n".join(content_parts)
+                
+                logger.warning("No content found in manual extraction")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(3)
+                    continue
+                return ""
+            else:
+                logger.error("No content extracted (neither structured nor HTML)")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(3)
+                    continue
+                return ""
+            
         except Exception as e:
             logger.error(f"Error scraping article (attempt {attempt + 1}): {str(e)}", exc_info=True)
+            if "Target page, context or browser" in str(e):
+                logger.critical(f"Detected potential Playwright state issue. Exiting scrape attempt.")
+                return ""  # Don't retry if browser state seems broken
             if attempt < max_retries - 1:
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
                 continue
             return ""
     

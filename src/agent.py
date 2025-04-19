@@ -15,6 +15,7 @@ from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 from src.agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
 from src.agent_tools import scrape_article, analyze_article
+from crawl4ai import AsyncWebCrawler
 
 from config.settings import AgentSettings
 from src.state import AgentState
@@ -220,71 +221,88 @@ class ArticleRankAgent:
             
             # Analyze each article
             analyses = []
-            for article in articles_to_analyze:
-                try:
-                    # Create article metadata
-                    metadata = {
-                        "title": article.title,
-                        "authors": article.authors,
-                        "subject": article.subject,
-                        "relevance_score": article.relevance_score,
-                        "score_reason": article.score_reason
-                    }
-                    
-                    # Get article content from original articles
-                    article_data = next(
-                        (a for a in original_articles if a["title"] == article.title),
-                        None
-                    )
-                    
-                    if not article_data:
-                        logger.error(f"Could not find article data for: {article.title}")
-                        continue
-                    
-                    # Get article content - either from body field or by scraping
-                    article_content = ""
-                    if "body" in article_data and article_data["body"]:
-                        article_content = article_data["body"]
-                    else:
-                        # Scrape content from HTML URL
-                        logger.info(f"Scraping content for article: {article.title}")
-                        article_content = await scrape_article(article.html_url)
+            # Create a single crawler instance for all articles
+            async with AsyncWebCrawler(verbose=False) as crawler:  # Use verbose=False for cleaner logs
+                logger.info("AsyncWebCrawler initialized for batch analysis")
+                
+                for i, article in enumerate(articles_to_analyze):
+                    try:
+                        logger.info(f"Processing article {i+1}/{len(articles_to_analyze)}: {article.title}")
+                        # Create article metadata
+                        metadata = {
+                            "title": article.title,
+                            "authors": article.authors,
+                            "subject": article.subject,
+                            "relevance_score": article.relevance_score,
+                            "score_reason": article.score_reason
+                        }
                         
-                        if not article_content:
-                            logger.error(f"Failed to scrape content for article: {article.title}")
+                        # Get article content from original articles
+                        article_data = next(
+                            (a for a in original_articles if a["title"] == article.title),
+                            None
+                        )
+                        
+                        if not article_data:
+                            logger.error(f"Could not find article data for: {article.title}")
                             continue
-                    
-                    # Analyze content
-                    analysis_result = await analyze_article(
-                        self.agent,  # Pass the agent as context
-                        article_content,  # The article text
-                        user_ctx,  # User context
-                        metadata  # Article metadata
-                    )
-                    
-                    # Create analysis object
-                    analysis = ArticleAnalysis(
-                        title=article.title,
-                        authors=article.authors,
-                        subject=article.subject,
-                        summary=analysis_result.get("summary", ""),
-                        importance=analysis_result.get("importance", ""),
-                        recommended_action=analysis_result.get("recommended_action", ""),
-                        abstract_url=article.abstract_url,
-                        html_url=article.html_url,
-                        pdf_url=article.pdf_url,
-                        relevance_score=article.relevance_score,
-                        score_reason=article.score_reason
-                    )
-                    analyses.append(analysis)
-                except Exception as e:
-                    logger.error(f"Error analyzing article {article.title}: {e}")
-                    continue
+                        
+                        # Get article content - either from body field or by scraping
+                        article_content = ""
+                        if "body" in article_data and article_data["body"] and len(article_data["body"]) > 50:  # Check if body has substantial content
+                            logger.debug(f"Using 'body' field content for: {article.title}")
+                            article_content = article_data["body"]
+                        elif article.html_url:  # Check if html_url exists
+                            logger.info(f"Scraping content for article: {article.title} from {article.html_url}")
+                            # Pass the existing crawler instance
+                            article_content = await scrape_article(crawler, article.html_url)
+                            
+                            if not article_content:
+                                logger.error(f"Failed to scrape content for article: {article.title}")
+                                continue
+                            else:
+                                logger.info(f"Successfully scraped content for: {article.title} ({len(article_content)} chars)")
+                        else:
+                            logger.warning(f"No 'body' field or html_url for article: {article.title}. Cannot get content for analysis.")
+                            continue  # Skip analysis if no content source
+                        
+                        # Analyze content
+                        logger.debug(f"Calling analyze_article for: {article.title}")
+                        # Pass the main agent instance (self) as context for analyze_article's LLM call
+                        analysis_result = await analyze_article(
+                            self.agent,  # Pass the pydantic_ai Agent instance
+                            article_content,
+                            user_ctx,
+                            metadata
+                        )
+                        logger.debug(f"Analysis result received for: {article.title}")
+                        
+                        # Create analysis object
+                        analysis = ArticleAnalysis(
+                            title=article.title,
+                            authors=article.authors,
+                            subject=article.subject,
+                            summary=analysis_result.get("summary", ""),
+                            importance=analysis_result.get("importance", ""),
+                            recommended_action=analysis_result.get("recommended_action", ""),
+                            abstract_url=article.abstract_url,
+                            html_url=article.html_url,
+                            pdf_url=article.pdf_url,
+                            relevance_score=article.relevance_score,
+                            score_reason=article.score_reason
+                        )
+                        analyses.append(analysis)
+                        logger.info(f"Completed analysis for: {article.title}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error analyzing article {article.title}: {e}", exc_info=True)
+                        continue
             
+            logger.info(f"Finished analyzing {len(analyses)} articles")
             return analyses
             
         except Exception as e:
-            logger.error(f"Error analyzing articles: {e}")
+            logger.error(f"Error analyzing articles: {e}", exc_info=True)
             return []
     
     def _parse_response(self, response: Any) -> List[RankedArticle]:
