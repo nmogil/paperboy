@@ -19,6 +19,9 @@ from src.agent_tools import scrape_article, analyze_article
 from config.settings import AgentSettings
 from src.state import AgentState
 
+# Load environment variables from config directory
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".env"))
+
 # ========== SETUP LOGGING ==========
 logging.basicConfig(
     level=logging.DEBUG,
@@ -28,6 +31,10 @@ logger = logging.getLogger("article_rank_agent")
 
 # Also set crawl4ai logger to DEBUG
 logging.getLogger("crawl4ai").setLevel(logging.DEBUG)
+
+# Add OpenAI client logging
+logging.getLogger("openai").setLevel(logging.DEBUG)
+logging.getLogger("httpx").setLevel(logging.DEBUG)
 
 # ========== MODELS ==========
 class RankedArticle(BaseModel):
@@ -81,18 +88,34 @@ class ArticleRankAgent:
         self.settings = settings
         self.state = state
         
+        # Log API key info (masked)
+        api_key = settings.openai_api_key
+        masked_key = f"{api_key[:8]}...{api_key[-4:]}" if api_key else "None"
+        logger.debug(f"Initializing OpenAI model with API key: {masked_key}")
+        logger.debug(f"Using model: {settings.openai_model}")
+        
         # Initialize OpenAI model
-        self.llm = OpenAIModel(
-            settings.openai_model,
-            provider=OpenAIProvider(api_key=settings.openai_api_key)
-        )
+        try:
+            self.llm = OpenAIModel(
+                settings.openai_model,
+                provider=OpenAIProvider(api_key=settings.openai_api_key)
+            )
+            logger.info("Successfully initialized OpenAI model")
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenAI model: {str(e)}")
+            raise
         
         # Initialize agent
-        self.agent = Agent(
-            self.llm,
-            system_prompt=SYSTEM_PROMPT,
-            retries=2
-        )
+        try:
+            self.agent = Agent(
+                self.llm,
+                system_prompt=SYSTEM_PROMPT,
+                retries=1
+            )
+            logger.info("Successfully initialized Agent")
+        except Exception as e:
+            logger.error(f"Failed to initialize Agent: {str(e)}")
+            raise
     
     async def rank_articles(
         self,
@@ -134,15 +157,29 @@ class ArticleRankAgent:
         
         try:
             logger.info(f"Running agent with model: {self.settings.openai_model}")
+            logger.debug("Making API call to OpenAI...")
+            
+            # Log the request details (without sensitive data)
+            logger.debug(f"Request details:")
+            logger.debug(f"- Model: {self.settings.openai_model}")
+            logger.debug(f"- System prompt length: {len(SYSTEM_PROMPT)} chars")
+            logger.debug(f"- User message length: {len(user_message)} chars")
+            logger.debug(f"- Number of articles: {len(limited_articles)}")
+            
             response = await self.agent.run(user_message)
+            logger.info("Successfully received response from OpenAI")
             
             # Parse and validate the response
             articles_ranked = self._parse_response(response)
+            logger.info(f"Successfully parsed {len(articles_ranked)} ranked articles")
             
             return articles_ranked
             
         except Exception as e:
-            logger.error(f"Error ranking articles: {e}")
+            logger.error(f"Error ranking articles: {str(e)}", exc_info=True)
+            if hasattr(e, 'response'):
+                logger.error(f"Response status code: {e.response.status_code}")
+                logger.error(f"Response body: {e.response.text}")
             return []
     
     async def analyze_ranked_articles(

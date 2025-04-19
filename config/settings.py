@@ -3,6 +3,7 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import Optional
+import os
 
 class AgentSettings(BaseSettings):
     """Settings for the article ranking agent"""
@@ -15,5 +16,5 @@ class AgentSettings(BaseSettings):
     top_n_articles: int = Field(default=5)
     
     class Config:
-        env_file = ".env"
+        env_file = os.path.join(os.path.dirname(__file__), ".env")
         env_file_encoding = "utf-8" 
