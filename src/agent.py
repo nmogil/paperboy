@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ValidationError, Field, validator
+from pydantic import BaseModel, ValidationError, Field, field_validator
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -41,7 +41,8 @@ class RankedArticle(BaseModel):
     html_url: Optional[str] = Field(default="")
     pdf_url: Optional[str] = Field(default="")
 
-    @validator('abstract_url', 'html_url', 'pdf_url')
+    @field_validator('abstract_url', 'html_url', 'pdf_url')
+    @classmethod
     def validate_urls(cls, v: Optional[str]) -> str:
         """Validate URLs, converting None to empty string"""
         if v is None:
