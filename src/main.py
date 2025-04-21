@@ -7,6 +7,8 @@ from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 import asyncio
 import logging
+import httpx
+from pydantic import HttpUrl
 
 from .api_models import GenerateDigestRequest, GenerateDigestResponse, DigestStatusResponse
 from .agent import rank_articles, generate_html_email
@@ -37,6 +39,24 @@ tasks: Dict[str, Dict[str, Any]] = {}
 
 logger = logging.getLogger(__name__)
 
+async def send_callback(task_id: str, status: str, callback_url: Optional[HttpUrl], result: Optional[str] = None):
+    """Sends a POST request to the callback URL with the task status and optional result."""
+    if callback_url:
+        payload = {"task_id": task_id, "status": status}
+        if result is not None:
+            payload["result"] = result # Add result to payload if provided
+        
+        try:
+            # Create client locally
+            async with httpx.AsyncClient() as client:
+                response = await client.post(str(callback_url), json=payload)
+                response.raise_for_status() # Raise an exception for bad status codes
+            logger.info(f"Callback sent successfully to {callback_url} for task {task_id}")
+        except httpx.RequestError as exc:
+            logger.error(f"Error sending callback to {callback_url} for task {task_id}: {exc}")
+        except httpx.HTTPStatusError as exc:
+             logger.error(f"Error sending callback to {callback_url} for task {task_id}: Status {exc.response.status_code} - {exc.response.text}")
+
 def create_agent() -> Agent:
     """Create and configure a new agent instance."""
     provider = OpenAIProvider(api_key=settings.openai_api_key)
@@ -58,11 +78,16 @@ async def process_digest_request(
     task_id: str,
     user_info: Any,
     target_date: Optional[str],
-    top_n: Optional[int]
+    top_n: Optional[int],
+    callback_url: Optional[HttpUrl] = None
 ) -> None:
     """Background task to process the digest generation request."""
+    current_status = ""
+    final_result: Optional[str] = None
     try:
         tasks[task_id]["status"] = "PROCESSING"
+        current_status = "PROCESSING"
+        await send_callback(task_id, current_status, callback_url) # No result for PROCESSING
         
         # Use async context manager for the crawler
         async with AsyncWebCrawler() as crawler:
@@ -74,7 +99,10 @@ async def process_digest_request(
             if not raw_articles:
                 logger.warning(f"No raw articles fetched for {target_date}. Ending task.")
                 tasks[task_id]["status"] = "FAILED"
-                tasks[task_id]["error"] = "Failed to fetch articles or none found."
+                error_message = "Failed to fetch articles or none found."
+                tasks[task_id]["error"] = error_message
+                current_status = "FAILED"
+                await send_callback(task_id, current_status, callback_url, result=error_message)
                 return
 
             # Rank articles
@@ -83,7 +111,10 @@ async def process_digest_request(
             if not ranked_articles:
                 logger.warning("No articles were ranked. Ending task.")
                 tasks[task_id]["status"] = "FAILED"
-                tasks[task_id]["error"] = "Ranking process returned no articles."
+                error_message = "Ranking process returned no articles."
+                tasks[task_id]["error"] = error_message
+                current_status = "FAILED"
+                await send_callback(task_id, current_status, callback_url, result=error_message)
                 return
 
             # Scrape articles using the managed crawler
@@ -142,15 +173,22 @@ async def process_digest_request(
             
             # Generate HTML
             html_content = generate_html_email(user_info, ranked_articles, analyses)
-            
+            final_result = html_content # Store result
+
             # Update task status
             tasks[task_id]["status"] = "COMPLETED"
-            tasks[task_id]["result"] = html_content
+            tasks[task_id]["result"] = final_result
+            current_status = "COMPLETED"
+            await send_callback(task_id, current_status, callback_url, result=final_result)
             
     except Exception as e:
         logger.exception(f"Unhandled error in process_digest_request for task {task_id}") # Log full traceback
+        error_message = str(e)
         tasks[task_id]["status"] = "FAILED"
-        tasks[task_id]["error"] = str(e)
+        tasks[task_id]["error"] = error_message
+        # Send final FAILED status update if not already sent
+        if current_status != "FAILED":
+             await send_callback(task_id, "FAILED", callback_url, result=error_message)
 
 @app.post("/generate-digest", response_model=GenerateDigestResponse)
 async def start_digest_generation(
@@ -160,18 +198,24 @@ async def start_digest_generation(
 ) -> GenerateDigestResponse:
     """Start the digest generation process."""
     task_id = str(uuid.uuid4())
+    callback_url_str = str(request.callback_url) if request.callback_url else None
     tasks[task_id] = {
         "status": "PENDING",
         "result": None,
-        "error": None
+        "error": None,
+        "callback_url": callback_url_str
     }
-    
+
+    # Send initial PENDING status update (no result)
+    await send_callback(task_id, "PENDING", request.callback_url)
+
     background_tasks.add_task(
         process_digest_request,
         task_id,
         request.user_info,
         request.target_date,
-        request.top_n_articles
+        request.top_n_articles,
+        request.callback_url
     )
     
     status_url = str(http_request.url_for('get_digest_status', task_id=task_id))
@@ -194,5 +238,6 @@ async def get_digest_status(task_id: str) -> DigestStatusResponse:
         task_id=task_id,
         status=task["status"],
         result=task.get("result"),
-        error=task.get("error")
+        error=task.get("error"),
+        callback_url=task.get("callback_url")
     ) 

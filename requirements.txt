@@ -7,3 +7,4 @@ beautifulsoup4
 # logfire          # Uncomment to enable structured logging
 fastapi>=0.100.0
 uvicorn[standard]>=0.20.0
+httpx>=0.25.0 # For making HTTP requests for callbacks
