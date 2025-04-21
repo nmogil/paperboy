@@ -54,25 +54,28 @@ Output MUST be valid JSON list. Do not explain your work outside this format."""
 # Example: use .format(**your_context) in tools!
 
 ARTICLE_ANALYSIS_PROMPT = """
-Analyze the following arXiv article for a user with goals: {goals}; professional title: {title} at {name}.
+Analyze the following arXiv article for the user:
+User Name: {user_name}
+User Title: {user_title}
+User Research Goals: {user_goals}
 
-Provide three sections, separated by double newlines:
+Article Title: {article_title}
+Article Authors: {article_authors}
+Article Subject: {article_subject}
 
-Summary
-[Short summary, 2-3 paragraphs.]
+Article Content (first 8000 chars):
+{article_content}
 
-Importance
-[Why is this work relevant to the user's goals/career?]
+Based on the article content and the user's profile, provide an analysis.
 
-Recommended Action
-[Specific action for the user to consider.]
+Your response MUST be **only** a valid JSON object structured exactly as follows, containing the analysis:
 
-Article title: {article_title}
-Authors: {authors}
-Subject: {subject}
+{{
+  "summary": "<A concise summary of the article's key findings and contributions.>",
+  "importance": "<Explanation of the article's importance or significance in its field and to the user's interests.>",
+  "recommended_action": "<Suggested next step for the user regarding this article (e.g., 'Read abstract', 'Skim PDF', 'Deep dive', 'Share with team', 'Ignore').>"
+}}
 
-Article content:
-{content}
-
-IMPORTANT: Output exactly as above – three sections, exactly, separated by double newlines.
+Do not include any other text, explanations, or markdown formatting outside of this JSON structure.
+Fill in the placeholders (<...>) with your analysis.
 """

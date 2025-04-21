@@ -17,6 +17,8 @@ from src.agent_prompts import ARTICLE_ANALYSIS_PROMPT
 import random
 import re
 from pydantic_ai import Agent
+from pydantic import ValidationError
+from pydantic_ai import ModelRetry
 
 # Set up logging for this module
 logger = logging.getLogger("arxiv_agent_tools")
@@ -250,61 +252,82 @@ async def analyze_article(
     Returns:
         ArticleAnalysis object containing analysis and metadata.
     """
-    prompt = ARTICLE_ANALYSIS_PROMPT.format(
-        goals=user_context.goals,
-        title=user_context.title,
-        name=user_context.name,
+    logger.debug(f"Analyzing article: {article_metadata.get('title', 'Unknown Title')}")
+
+    # Prepare the prompt - USE CORRECT KEYWORDS FOR .format()
+    analysis_prompt = ARTICLE_ANALYSIS_PROMPT.format(
+        user_name=user_context.name,
+        user_title=user_context.title,
+        user_goals=user_context.goals,
         article_title=article_metadata.get("title", "N/A"),
-        authors=", ".join(article_metadata.get("authors", [])),
-        subject=article_metadata.get("subject", "N/A"),
-        content=article_content
+        article_authors=", ".join(article_metadata.get("authors", [])),
+        article_subject=article_metadata.get("subject", "N/A"),
+        article_content=article_content[:settings.analysis_content_max_chars] # Use setting
     )
-    
-    # Run the agent with the formatted prompt
+
     try:
-        response = await agent.run(prompt)
-        
-        response_text = ""
-        if hasattr(response, 'output') and isinstance(response.output, str):
-             response_text = response.output
-        elif isinstance(response, str):
-             response_text = response
-        else:
-             logger.warning(f"Unexpected response type from agent.run for analysis: {type(response)}")
-             try:
-                 response_text = str(response.output if hasattr(response, 'output') else response)
-             except Exception:
-                 response_text = ""
-        
-        if not response_text:
-             # If agent fails, return metadata with placeholder analysis
-             logger.error("Agent returned empty or non-string response for analysis")
-             return ArticleAnalysis(
-                 **article_metadata,
-                 summary="Analysis failed: Agent returned empty response.",
-                 importance="Unknown",
-                 recommended_action="Manual review needed"
-             )
-             
-        # Parse the structured response (Summary\n\nImportance\n\nAction)
-        parts = response_text.strip().split('\n\n', 2)
-        summary = parts[0].replace("Summary", "").strip() if len(parts) > 0 else "Analysis incomplete"
-        importance = parts[1].replace("Importance", "").strip() if len(parts) > 1 else "Unknown"
-        action = parts[2].replace("Recommended Action", "").strip() if len(parts) > 2 else "Review needed"
-        
-        # Return the validated ArticleAnalysis object
-        return ArticleAnalysis(
-            **article_metadata,
-            summary=summary,
-            importance=importance,
-            recommended_action=action
+        # Run the agent with the analysis prompt and ArticleAnalysis as the response model
+        res = await agent.run(
+            analysis_prompt,
+            response_model=ArticleAnalysis # Expect Pydantic AI to handle validation
         )
+        
+        # Pydantic AI should return the validated model directly in res.output
+        if isinstance(res.output, ArticleAnalysis):
+             analysis_result = res.output
+             # Ensure inherited fields are populated correctly from metadata
+             # (agent might not return them, or might hallucinate)
+             analysis_result.title = article_metadata.get("title", analysis_result.title)
+             analysis_result.authors = article_metadata.get("authors", analysis_result.authors)
+             analysis_result.subject = article_metadata.get("subject", analysis_result.subject)
+             analysis_result.abstract_url = article_metadata.get("abstract_url", analysis_result.abstract_url)
+             analysis_result.html_url = article_metadata.get("html_url", analysis_result.html_url)
+             analysis_result.pdf_url = article_metadata.get("pdf_url", analysis_result.pdf_url)
+             analysis_result.relevance_score = article_metadata.get("relevance_score", analysis_result.relevance_score)
+             analysis_result.score_reason = article_metadata.get("score_reason", analysis_result.score_reason)
+             
+             logger.info(f"Successfully analyzed article: {analysis_result.title}")
+             return analysis_result
+        else:
+            logger.error(f"Analysis agent output was not ArticleAnalysis as expected. Type: {type(res.output)}. Output: {res.output}")
+            # Attempt to parse if it's a string that looks like JSON
+            if isinstance(res.output, str):
+                try:
+                    import json
+                    data = json.loads(res.output)
+                    if isinstance(data, dict):
+                         # Manually create the object, merging metadata
+                         merged_data = {**article_metadata, **data}
+                         try:
+                              validated_analysis = ArticleAnalysis(**merged_data)
+                              logger.warning("Fallback JSON parsing succeeded for analysis.")
+                              return validated_analysis
+                         except ValidationError as val_err_fallback:
+                              logger.error(f"Fallback analysis validation failed: {val_err_fallback}")
+                              raise TypeError(f"LLM failed to return valid ArticleAnalysis structure. Fallback validation failed.") from val_err_fallback
+                    else:
+                         raise TypeError(f"LLM failed to return valid ArticleAnalysis structure. Fallback JSON was not a dict.")
+                except json.JSONDecodeError as json_err:
+                    logger.error(f"Fallback JSON parsing failed for analysis: {json_err}")
+                    raise TypeError(f"LLM failed to return valid ArticleAnalysis structure. Output was not valid JSON.") from json_err
+                except Exception as parse_err:
+                     logger.error(f"Unexpected error during fallback parsing: {parse_err}", exc_info=True)
+                     raise TypeError(f"LLM failed to return valid ArticleAnalysis structure. Got unexpected error during fallback.") from parse_err
+            else:
+                 raise TypeError(f"LLM failed to return valid ArticleAnalysis structure. Got: {type(res.output)}")
+
+    except ValidationError as e:
+        # This might catch validation errors during the agent.run call itself
+        logger.error(f"Analysis LLM output failed schema validation: {e}", exc_info=True)
+        # Let Pydantic AI's retry handle this if configured upstream
+        raise ModelRetry(f"Analysis schema validation failed: {e}") from e
     except Exception as e:
-        logger.error(f"Error running LLM for analysis via agent: {e}", exc_info=True)
+        logger.error(f"Error during article analysis for '{article_metadata.get('title')}': {e}", exc_info=True)
         # Return metadata with error analysis if exception occurs
+        # This makes the overall process more robust, even if one analysis fails
         return ArticleAnalysis(
             **article_metadata,
-            summary=f"Analysis failed: {str(e)}",
+            summary=f"Analysis failed: {type(e).__name__} - {str(e)}",
             importance="Unknown",
             recommended_action="Error during analysis"
         ) 

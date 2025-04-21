@@ -141,15 +141,17 @@ Configuration is managed centrally via Pydantic `BaseSettings` in `src/config.py
 
 ### Environment Variables (`config/.env`)
 
-| Variable          | Description                                         | Default (`src/config.py`) |
-| ----------------- | --------------------------------------------------- | ------------------------- |
-| `OPENAI_API_KEY`  | OpenAI API key                                      | **Required**              |
-| `OPENAI_MODEL`    | OpenAI Model ID                                     | `gpt-4o`                  |
-| `ARXIV_FILE`      | Article data filename (in `data/`) or absolute path | `arxiv_papers.json`       |
-| `TOP_N_ARTICLES`  | Number of articles to rank/analyze                  | `5`                       |
-| `LOG_LEVEL`       | Logging level (DEBUG, INFO, etc.)                   | `INFO`                    |
-| `CRAWLER_TIMEOUT` | Web crawler page timeout (ms)                       | `25000`                   |
-| `AGENT_RETRIES`   | Pydantic AI agent retry attempts                    | `2`                       |
+| Variable                     | Description                                         | Default (`src/config.py`) |
+| ---------------------------- | --------------------------------------------------- | ------------------------- |
+| `OPENAI_API_KEY`             | OpenAI API key                                      | **Required**              |
+| `OPENAI_MODEL`               | OpenAI Model ID                                     | `gpt-4o`                  |
+| `ARXIV_FILE`                 | Article data filename (in `data/`) or absolute path | `arxiv_papers.json`       |
+| `TOP_N_ARTICLES`             | Number of articles to rank/analyze                  | `5`                       |
+| `LOG_LEVEL`                  | Logging level (DEBUG, INFO, etc.)                   | `INFO`                    |
+| `CRAWLER_TIMEOUT`            | Web crawler page timeout (ms)                       | `25000`                   |
+| `AGENT_RETRIES`              | Pydantic AI agent retry attempts                    | `2`                       |
+| `ANALYSIS_CONTENT_MAX_CHARS` | Max characters of article content sent for analysis | `8000`                    |
+| `RANKING_INPUT_MAX_ARTICLES` | Max number of raw articles sent to LLM for ranking  | `20`                      |
 
 ### Model Configuration
 
@@ -196,10 +198,11 @@ Common issues and solutions:
 
    - Ensure you are running the agent from the project root directory using `python -m src.agent`.
 
-3. **Memory Issues:**
+3. **Memory Issues / Context Limits:**
 
    - The agent currently loads all articles specified by `ARXIV_FILE` into memory. Consider processing large files in chunks if memory becomes an issue.
-   - The number of articles sent to the LLM for ranking is currently capped at 20 within `src/agent.py::rank_articles`.
+   - The number of raw articles sent to the LLM for ranking is limited by the `RANKING_INPUT_MAX_ARTICLES` setting (default: 20) to manage context window size.
+   - The amount of content from each article sent for analysis is limited by `ANALYSIS_CONTENT_MAX_CHARS` (default: 8000).
 
 4. **Performance / Cost:**
    - Consider using a less expensive model like `gpt-3.5-turbo` via `OPENAI_MODEL` in `config/.env`.

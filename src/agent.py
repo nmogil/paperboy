@@ -80,7 +80,7 @@ async def rank_articles(
     Returns:
         List of validated RankedArticle objects with fields filled from original data.
     """
-    input_articles = articles[:20] # Limit input size for LLM context
+    input_articles = articles[:settings.ranking_input_max_articles] # Limit input size using setting
 
     # --- 1. Improved Prompt --- 
     # Explicitly instruct LLM to include all fields from input if available
@@ -162,8 +162,9 @@ async def rank_articles(
         return filled_ranked_articles # Return the list with filled/verified data
 
     except ValidationError as e:
-        logger.error(f"LLM output failed schema validation: {e}", exc_info=True)
-        raise
+        # Use ModelRetry as suggested in refactoring plan Step 6
+        logger.error(f"LLM output failed schema validation, attempting retry: {e}", exc_info=True)
+        raise ModelRetry(f"Schema validation failed, retrying: {e}") from e
     except Exception as e:
         logger.error(f"Error in rank_articles: {e}", exc_info=True)
         raise

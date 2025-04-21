@@ -9,14 +9,14 @@ from typing import Any, List, Dict, Optional
 
 class RankedArticle(BaseModel):
     """Pydantic model for a single ranked article."""
-    title: str
-    authors: List[str] = Field(min_items=1)
-    subject: str
-    score_reason: str
-    relevance_score: int = Field(ge=0, le=100)
-    abstract_url: HttpUrl # Changed to HttpUrl for validation
-    html_url: Optional[HttpUrl] = None # Changed to HttpUrl, optional
-    pdf_url: HttpUrl # Changed to HttpUrl
+    title: str = Field(..., description="The exact title of the ArXiv article.")
+    authors: List[str] = Field(..., min_items=1, description="List of author names for the article.")
+    subject: str = Field(..., description="The primary subject category (e.g., cs.AI, physics.hep-th).")
+    score_reason: str = Field(..., description="A brief explanation for the assigned relevance score based on the user's profile.")
+    relevance_score: int = Field(..., ge=0, le=100, description="Score from 0 to 100 indicating relevance to the user profile. Higher means more relevant.")
+    abstract_url: HttpUrl = Field(..., description="The URL link to the article's abstract page on ArXiv.") # Changed to HttpUrl for validation
+    html_url: Optional[HttpUrl] = Field(None, description="Optional URL link to an HTML version of the article, if available.") # Changed to HttpUrl, optional
+    pdf_url: HttpUrl = Field(..., description="The URL link to the article's PDF version on ArXiv.") # Changed to HttpUrl
 
     @field_validator("authors", mode="before")
     @classmethod
@@ -62,19 +62,19 @@ class RankedArticle(BaseModel):
 class ArticleAnalysis(BaseModel):
     """Analysis result for a single article."""
     # Inherit fields from RankedArticle or redefine if structure differs significantly
-    title: str
-    authors: List[str]
-    subject: str
-    abstract_url: HttpUrl
-    html_url: Optional[HttpUrl] = None
-    pdf_url: HttpUrl
-    relevance_score: int = Field(ge=0, le=100)
-    score_reason: str
+    title: str = Field(..., description="The exact title of the analyzed ArXiv article.")
+    authors: List[str] = Field(..., description="List of author names for the analyzed article.")
+    subject: str = Field(..., description="The primary subject category of the analyzed article.")
+    abstract_url: HttpUrl = Field(..., description="The URL link to the article's abstract page.")
+    html_url: Optional[HttpUrl] = Field(None, description="Optional URL link to an HTML version, if available.")
+    pdf_url: HttpUrl = Field(..., description="The URL link to the article's PDF version.")
+    relevance_score: int = Field(..., ge=0, le=100, description="The previously assigned relevance score (0-100).")
+    score_reason: str = Field(..., description="The reason for the relevance score.")
 
     # Analysis specific fields
-    summary: str
-    importance: str
-    recommended_action: str
+    summary: str = Field(..., description="A concise summary of the article's key findings and contributions.")
+    importance: str = Field(..., description="Explanation of the article's importance or significance in its field and to the user's interests.")
+    recommended_action: str = Field(..., description="Suggested next step for the user regarding this article (e.g., 'Read abstract', 'Skim PDF', 'Deep dive', 'Share with team', 'Ignore').")
 
     # Optional: Add arxiv_id property if needed here too, or inherit/compose
     @property
