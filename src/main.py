@@ -1,6 +1,6 @@
 import uuid
 from typing import Dict, Any, Union, Optional
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
@@ -17,6 +17,7 @@ from .config import settings
 from .agent_tools import scrape_article, analyze_article
 from crawl4ai import AsyncWebCrawler
 from .agent_prompts import SYSTEM_PROMPT
+from .security import validate_api_key
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -194,7 +195,8 @@ async def process_digest_request(
 async def start_digest_generation(
     request: GenerateDigestRequest,
     background_tasks: BackgroundTasks,
-    http_request: Request
+    http_request: Request,
+    api_key: str = Depends(validate_api_key)
 ) -> GenerateDigestResponse:
     """Start the digest generation process."""
     task_id = str(uuid.uuid4())
@@ -228,7 +230,10 @@ async def start_digest_generation(
     )
 
 @app.get("/digest-status/{task_id}", response_model=DigestStatusResponse)
-async def get_digest_status(task_id: str) -> DigestStatusResponse:
+async def get_digest_status(
+    task_id: str,
+    api_key: str = Depends(validate_api_key)
+) -> DigestStatusResponse:
     """Get the status of a digest generation task."""
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")

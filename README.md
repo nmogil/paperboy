@@ -1,6 +1,6 @@
 # Article Ranking Agent
 
-A sophisticated AI agent that intelligently finds and ranks relevant academic papers based on user information and research interests. Built with modern Python practices and robust error handling.
+A sophisticated AI agent that intelligently finds and ranks relevant academic papers based on user information and research interests. Built with modern Python practices, FastAPI, and robust error handling.
 
 ## Project Structure
 
@@ -12,7 +12,10 @@ paperboy/
 │   ├── agent_prompts.py   # Agent prompts
 │   ├── config.py          # Configuration loading (Pydantic BaseSettings)
 │   ├── models.py          # Pydantic data models
-│   ├── state.py           # State management (if used)
+│   ├── api_models.py      # FastAPI request/response models
+│   ├── main.py           # FastAPI application entry point
+│   ├── security.py       # API security implementation
+│   ├── state.py          # State management (if used)
 │   └── __init__.py        # Package initialization
 ├── tests/                 # Test files
 │   ├── test_agent.py
@@ -26,6 +29,10 @@ paperboy/
 ├── data/                # Data files
 │   └── agent_state.json # Example agent state persistence
 ├── notebooks/           # Jupyter notebooks (for experimentation)
+├── Dockerfile          # Docker configuration
+├── docker-compose.yaml # Docker Compose configuration
+├── .dockerignore       # Docker ignore rules
+├── .gitignore          # Git ignore rules
 └── docs/               # Documentation files
 ```
 
@@ -37,103 +44,89 @@ paperboy/
   - Advanced relevance scoring with detailed reasoning
   - Support for large article datasets with automatic truncation
 
+- **FastAPI Integration**
+
+  - RESTful API endpoints for digest generation and status checking
+  - Asynchronous processing with background tasks
+  - API key authentication for secure access
+  - Callback URL support for status updates
+  - Swagger/OpenAPI documentation at `/docs`
+
+- **Docker Support**
+
+  - Multi-stage build for optimized image size
+  - Development and production configurations
+  - Easy deployment with Docker Compose
+  - Health check endpoints
+  - Automatic environment isolation
+
 - **Robust Architecture**
 
   - Modular design with clear separation of concerns (`agent`, `tools`, `config`, `models`)
   - Centralized, type-safe configuration via Pydantic `BaseSettings`
   - Comprehensive error handling and logging
-  - State management for persistent agent memory (if implemented)
+  - State management for persistent agent memory
   - Configurable model selection and parameters via environment variables
 
 - **Developer-Friendly**
   - Type hints and Pydantic models for better code quality and validation
-  - Extensive test coverage (planned/included)
+  - Extensive test coverage
   - Clear documentation and implementation notes
   - Easy configuration through a `.env` file
+  - Hot-reload support in development
 
 ## Installation
+
+### Using Docker (Recommended)
 
 1. Clone this repository:
 
    ```bash
    git clone <repository-url>
-   cd article-ranking-agent # Or your project directory name
+   cd paperboy
    ```
 
-2. Create and activate a virtual environment:
+2. Set up environment variables:
 
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   cp config/.env.example config/.env
+   # Edit config/.env with your settings
    ```
 
-3. Install dependencies:
+3. Build and run with Docker Compose:
+
+   ```bash
+   docker-compose up --build
+   ```
+
+   The API will be available at:
+
+   - API Endpoints: http://localhost:8000
+   - API Documentation: http://localhost:8000/docs
+   - Alternative Documentation: http://localhost:8000/redoc
+
+### Manual Installation (Not Recommended)
+
+Only use this method if you cannot use Docker for some reason. Docker is the recommended way to run this application as it ensures consistent environments and includes all necessary dependencies.
+
+1. Clone this repository:
+
+   ```bash
+   git clone <repository-url>
+   cd paperboy
+   ```
+
+2. Install dependencies:
 
    ```bash
    pip install -r requirements.txt
    ```
 
-4. Set up environment variables:
-
-   - Go to the `config/` directory: `cd config`
-   - Copy the example `.env` file:
-     ```bash
-     cp .env.example .env
-     ```
-   - Go back to the root directory: `cd ..`
-
-5. Edit `config/.env` to configure:
-   - `OPENAI_API_KEY`: Your OpenAI API key (required).
-   - `OPENAI_MODEL`: The OpenAI model to use (default: `gpt-4o`).
-   - `ARXIV_FILE`: Path to the arXiv data file (relative to `data/` directory or absolute, default: `arxiv_papers.json`).
-   - `TOP_N_ARTICLES`: Number of top articles to return (default: `5`).
-   - `LOG_LEVEL`: Logging level (e.g., `INFO`, `DEBUG`, default: `INFO`).
-   - `CRAWLER_TIMEOUT`: Timeout in milliseconds for web crawling (default: `25000`).
-   - `AGENT_RETRIES`: Number of times the agent should retry on failure (default: `2`).
-   - Additional configuration options as needed (add them to `src/config.py` and `config/.env.example`).
-     Configuration is loaded at startup by `src/config.py`.
-
-## Usage
-
-### Basic Usage
-
-Run the agent from the project root directory using the `-m` flag to treat it as a module:
-
-```bash
-python -m src.agent
-```
-
-The agent will:
-
-1. Load configuration from `config/.env` via `src/config.py`.
-2. Load articles from the specified file (default: `data/arxiv_papers.json`).
-3. Process user information and research interests (defined in `src/agent.py::main`).
-4. Rank articles based on relevance using the configured LLM.
-5. Analyze the top ranked articles using the LLM.
-6. Generate an HTML summary (`arxiv_digest.html`) in the root directory.
-
-### Advanced Usage
-
-#### Custom User Profile
-
-Edit the `user_info` `UserContext` object in the `main()` function within `src/agent.py`:
-
-```python
-# In src/agent.py -> main()
-user_info = UserContext(
-    name="Your Name",
-    title="Your Title",
-    goals="Your research interests and goals"
-)
-```
-
-#### Testing
-
-Run the test suite (assuming tests are set up):
-
-```bash
-python -m pytest tests/
-```
+3. Set up environment variables:
+   ```bash
+   cp config/.env.example config/.env
+   # Edit config/.env with your settings
+   ```
 
 ## Configuration
 
@@ -152,14 +145,96 @@ Configuration is managed centrally via Pydantic `BaseSettings` in `src/config.py
 | `AGENT_RETRIES`              | Pydantic AI agent retry attempts                    | `2`                       |
 | `ANALYSIS_CONTENT_MAX_CHARS` | Max characters of article content sent for analysis | `8000`                    |
 | `RANKING_INPUT_MAX_ARTICLES` | Max number of raw articles sent to LLM for ranking  | `20`                      |
+| `API_KEY`                    | Secret key for API authentication                   | **Required**              |
 
-### Model Configuration
+## Usage
 
-The agent supports various OpenAI models configured via the `OPENAI_MODEL` environment variable.
+### API Endpoints
 
-- **`gpt-4o` (Default):** Balances performance and capability.
-- **`gpt-4-turbo`:** Strong reasoning capabilities.
-- **`gpt-3.5-turbo`:** Faster, more cost-effective for simpler tasks.
+The service exposes the following REST API endpoints:
+
+1. **Generate Digest** - `POST /generate-digest`
+
+   ```bash
+   curl -X POST http://localhost:8000/generate-digest \
+     -H "X-API-Key: your_api_key" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "user_info": {
+         "name": "John Doe",
+         "title": "AI Researcher",
+         "goals": "Looking for papers on LLMs and transformers"
+       },
+       "target_date": "2024-03-20",
+       "top_n_articles": 5,
+       "callback_url": "http://your-callback-url.com/webhook"
+     }'
+   ```
+
+2. **Check Digest Status** - `GET /digest-status/{task_id}`
+
+   ```bash
+   curl http://localhost:8000/digest-status/{task_id} \
+     -H "X-API-Key: your_api_key"
+   ```
+
+3. **Health Check** - `GET /digest-status/health`
+   ```bash
+   curl http://localhost:8000/digest-status/health
+   ```
+
+For full API documentation, visit:
+
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+### Docker Commands
+
+- **Start the service:**
+
+  ```bash
+  docker-compose up
+  ```
+
+- **Rebuild and start:**
+
+  ```bash
+  docker-compose up --build
+  ```
+
+- **Run in background:**
+
+  ```bash
+  docker-compose up -d
+  ```
+
+- **View logs:**
+
+  ```bash
+  docker-compose logs -f
+  ```
+
+- **Stop the service:**
+
+  ```bash
+  docker-compose down
+  ```
+
+- **Clean up unused resources:**
+  ```bash
+  docker-compose down --volumes --remove-orphans
+  docker system prune
+  ```
+
+### Development Mode
+
+For development with hot-reload:
+
+```bash
+docker-compose up --build
+```
+
+The service will automatically reload when you make changes to the code.
 
 ## Development
 
@@ -194,23 +269,35 @@ Common issues and solutions:
    - Check variable names in `config/.env` match the `validation_alias` in `src/config.py`.
    - Verify API key validity.
 
-2. **`ImportError: attempted relative import with no known parent package`:**
+2. **Docker Issues:**
 
-   - Ensure you are running the agent from the project root directory using `python -m src.agent`.
+   - If the container fails to start, check logs: `docker-compose logs -f`
+   - For permission issues: `sudo chown -R $USER:$USER .`
+   - If port 8000 is in use: modify the port mapping in `docker-compose.yaml`
+   - For cleanup: `docker-compose down --volumes --remove-orphans && docker system prune`
 
-3. **Memory Issues / Context Limits:**
+3. **API Authentication Errors:**
 
-   - The agent currently loads all articles specified by `ARXIV_FILE` into memory. Consider processing large files in chunks if memory becomes an issue.
-   - The number of raw articles sent to the LLM for ranking is limited by the `RANKING_INPUT_MAX_ARTICLES` setting (default: 20) to manage context window size.
-   - The amount of content from each article sent for analysis is limited by `ANALYSIS_CONTENT_MAX_CHARS` (default: 8000).
+   - Ensure the `X-API-Key` header matches the `API_KEY` in your `.env` file
+   - Check if the API key is properly set in your environment
+   - Verify the header name is exactly `X-API-Key` (case-sensitive)
 
-4. **Performance / Cost:**
+4. **Memory Issues / Context Limits:**
+
+   - The agent currently loads all articles specified by `ARXIV_FILE` into memory.
+   - The number of raw articles sent to the LLM for ranking is limited by `RANKING_INPUT_MAX_ARTICLES`.
+   - The amount of content from each article sent for analysis is limited by `ANALYSIS_CONTENT_MAX_CHARS`.
+   - If Docker container runs out of memory, adjust memory limits in `docker-compose.yaml`
+
+5. **Performance / Cost:**
    - Consider using a less expensive model like `gpt-3.5-turbo` via `OPENAI_MODEL` in `config/.env`.
    - Adjust `AGENT_RETRIES` if excessive retries are occurring.
+   - Use background processing for long-running tasks
+   - Implement caching if needed
 
 ## Acknowledgments
 
 - OpenAI for API access
-- Pydantic & Pydantic-AI maintainers
-- Contributors and maintainers
+- FastAPI and Pydantic maintainers
+- Docker and container ecosystem
 - Academic paper sources (e.g., ArXiv)

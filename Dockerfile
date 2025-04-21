@@ -1,3 +1,26 @@
+# Build stage
+FROM python:3.10-slim as builder
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Set working directory
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Final stage
 FROM python:3.10-slim
 
 # Set environment variables
@@ -8,12 +31,9 @@ ENV PYTHONUNBUFFERED=1 \
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install only the necessary Playwright dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    gcc \
-    python3-dev \
-    # Playwright dependencies
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -33,13 +53,12 @@ RUN apt-get update && \
     libatspi2.0-0 && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy installed dependencies from builder stage
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Install Playwright browsers
-RUN playwright install chromium && \
-    playwright install-deps chromium
+# Install only Chromium browser (skip other browsers)
+RUN playwright install chromium --with-deps
 
 # Copy the application code
 COPY . .
