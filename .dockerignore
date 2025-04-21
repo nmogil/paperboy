@@ -1,0 +1,33 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+notebooks/
+tests/
+output/
+data/
+.cursor/
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Documentation
+*.md
+!README.md 
