@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
+
+# Import settings
+from .config import settings
+
 from src.models import UserContext, ArticleAnalysis
 from src.agent_prompts import ARTICLE_ANALYSIS_PROMPT
 import random
@@ -120,7 +124,7 @@ async def scrape_article(crawler: AsyncWebCrawler, url: str) -> str:
     config = CrawlerRunConfig(
         extraction_strategy=JsonCssExtractionStrategy(c_schema, verbose=False),
         cache_mode=CacheMode.BYPASS,
-        page_timeout=25000 # Consider increasing if timeouts persist
+        page_timeout=settings.crawler_timeout # Use setting from config
     )
 
     try:

@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any, List, Dict
 import json
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator, TypeAdapter
 from pydantic_ai import Agent, RunContext, ModelRetry
 from pydantic_ai.models.openai import OpenAIModel
@@ -21,17 +20,12 @@ from .agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
 from .agent_tools import scrape_article, analyze_article
 from crawl4ai import AsyncWebCrawler # Import the crawler
 
-# Load environment variables
-dotenv_path = os.path.join(os.path.dirname(__file__), '..', 'config', '.env')
-if os.path.exists(dotenv_path):
-    load_dotenv(dotenv_path=dotenv_path)
-else:
-    # Fallback to project root if not found in config
-    load_dotenv()
+# Import settings from .config
+from .config import settings
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, settings.log_level.upper(), logging.INFO), # Use settings
     format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
 logger = logging.getLogger("pydantic_arxiv_agent")
@@ -54,12 +48,12 @@ class Deps:
 
 arxiv_agent = Agent(
     model=OpenAIModel(
-        os.getenv("OPENAI_MODEL", "gpt-4o"),
-        provider=OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
+        settings.openai_model, # Use settings
+        provider=OpenAIProvider(api_key=settings.openai_api_key) # Use settings
     ),
     system_prompt=SYSTEM_PROMPT,
     deps_type=Deps,
-    retries=2,
+    retries=settings.agent_retries, # Use settings
     response_model=List[RankedArticle],   # Uses imported RankedArticle
 )
 
@@ -72,7 +66,7 @@ arxiv_agent = Agent(
 async def rank_articles(
     user_info: UserContext,
     articles: List[Dict[str, Any]],
-    top_n: int = 5
+    top_n: int = settings.top_n_articles
 ) -> List[RankedArticle]:
     """
     Runs the LLM to rank articles for the given user profile.
@@ -81,7 +75,7 @@ async def rank_articles(
     Args:
         user_info: UserContext object containing user profile.
         articles: List of raw article dictionaries.
-        top_n: How many top articles to select
+        top_n: How many top articles to select (defaults to value in settings)
 
     Returns:
         List of validated RankedArticle objects with fields filled from original data.
@@ -177,7 +171,7 @@ async def rank_articles(
 async def analyze_articles(
     user_info: UserContext, # Changed from dict to UserContext
     articles: List[RankedArticle],
-    top_n: int = 5
+    top_n: int = settings.top_n_articles
 ) -> List[ArticleAnalysis]:
     """
     Get LLM-generated analyses for the most relevant articles.
@@ -185,7 +179,7 @@ async def analyze_articles(
     Args:
         user_info: UserContext object.
         articles: List of RankedArticle objects.
-        top_n: Number of articles to analyze
+        top_n: Number of articles to analyze (defaults to value in settings)
 
     Returns:
         List of ArticleAnalysis objects.
@@ -304,109 +298,71 @@ def generate_html_email(
 #        TESTING AREA
 # ============================
 async def main():
-    """Example usage demonstrating Pydantic model usage and file loading"""
-    # Create UserContext instance
-    try:
-        user = UserContext(
-            name="Dr. Evelyn Reed",
-            title="AI Researcher",
-            goals="Cutting-edge advancements in Large Language Models and their applications in scientific discovery."
-        )
-    except ValidationError as e:
-        logger.error(f"Failed to create UserContext: {e}")
-        return
+    """Main execution flow."""
+    # --- User Profile ---
+    user_info = UserContext(
+        name="Dr. Evelyn Reed",
+        title="Quantum Computing Researcher",
+        goals="Stay updated on breakthroughs in quantum algorithms, error correction, and hardware developments. Particularly interested in applications for drug discovery and materials science."
+    )
+
+    # --- Load Articles ---
+    # Use settings for the default file path
+    # default_arxiv_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'arxiv_papers.json')
+    # arxiv_file_path = os.getenv("ARXIV_FILE", default_arxiv_file)
+    arxiv_file_path = settings.arxiv_file # Use settings
     
-    # Define path for article data file
-    default_arxiv_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'arxiv_cs_submissions_2025-04-01.json')
-    arxiv_file_path = os.getenv("ARXIV_FILE", default_arxiv_file)
-    logger.info(f"Attempting to load articles from: {arxiv_file_path}")
+    if not os.path.isabs(arxiv_file_path):
+        arxiv_file_path = os.path.join(os.path.dirname(__file__), '..', 'data', arxiv_file_path) # Assume relative to data dir if not absolute
 
-    # Attempt to load articles from the JSON file
-    articles_to_process = []
     try:
-        with open(arxiv_file_path, "r", encoding="utf-8") as f:
-            articles_to_process = json.load(f)
-        if not isinstance(articles_to_process, list):
-            logger.error(f"Loaded data from {arxiv_file_path} is not a list. Type: {type(articles_to_process)}")
-            articles_to_process = [] # Reset to empty list
-        else:
-             logger.info(f"Successfully loaded {len(articles_to_process)} articles from {arxiv_file_path}.")
+        with open(arxiv_file_path, 'r') as f:
+            raw_articles = json.load(f)
     except FileNotFoundError:
-        logger.warning(f"Article data file not found: {arxiv_file_path}. Using fallback sample data.")
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to decode JSON from {arxiv_file_path}: {e}. Using fallback sample data.")
-    except Exception as e:
-        logger.error(f"An unexpected error occurred loading {arxiv_file_path}: {e}. Using fallback sample data.")
-
-    # Fallback to sample data if loading failed or produced no articles
-    if not articles_to_process:
-        logger.warning("Using hardcoded sample article data.")
-        articles_to_process = [
-             {
-                 "title": "Self-Consuming Generative Models Go Mad",
-                 "authors": ["R. Rombach", "A. Blattmann"],
-                 "subject": "cs.LG",
-                 "score_reason": "Directly related to LLM behavior",
-                 "relevance_score": 95,
-                 "abstract_url": "https://arxiv.org/abs/2307.01850",
-                 "html_url": "https://arxiv.org/html/2307.01850",
-                 "pdf_url": "https://arxiv.org/pdf/2307.01850.pdf"
-             },
-             {
-                 "title": "Attention Is All You Need",
-                 "authors": ["A. Vaswani", "et al."],
-                 "subject": "cs.CL",
-                 "score_reason": "Fundamental paper for modern LLMs",
-                 "relevance_score": "90",
-                 "abstract_url": "https://arxiv.org/abs/1706.03762",
-                 "html_url": None,
-                 "pdf_url": "https://arxiv.org/pdf/1706.03762.pdf"
-             },
-            # Add more samples if needed
-        ]
-        
-    if not articles_to_process:
-        logger.error("No articles available to process (neither from file nor fallback). Aborting.")
+        logger.error(f"Input article file not found: {arxiv_file_path}")
+        return
+    except json.JSONDecodeError:
+        logger.error(f"Error decoding JSON from file: {arxiv_file_path}")
         return
 
-    # Determine how many articles to rank
-    top_n = int(os.getenv("TOP_N_ARTICLES", "5"))
+    # --- Run Agent Steps ---
+    # top_n = int(os.getenv("TOP_N_ARTICLES", "5")) # Get top_n from settings via function default
+    
+    # Make sure the tools are registered by importing them
+    from . import agent_tools 
+    
+    # Pass necessary dependencies to the agent tools if required via context
+    # For now, assuming the agent manages deps internally or tools don't need external deps passed this way
+    deps_instance = Deps(agent=arxiv_agent)
 
+    logger.info("Starting article ranking...")
     try:
-        logger.info("--- Ranking Articles ---")
-        # Pass UserContext object and the loaded (or sample) raw article dicts
-        ranked_articles = await rank_articles(user, articles_to_process, top_n=top_n)
-        logger.info(f"Top {min(top_n, len(articles_to_process))} articles ranked (received {len(ranked_articles)}): ") # Adjusted log
-        for article in ranked_articles:
-            logger.info(f"  - {article.title} (Score: {article.relevance_score}) - ID: {article.arxiv_id}")
-
-        if not ranked_articles:
-            logger.warning("No articles were ranked successfully. Skipping analysis and email generation.")
-            return
-
-        logger.info("--- Analyzing Top Articles ---")
-        # Pass UserContext object and List[RankedArticle]
-        # Analyze only the top_n ranked articles, matching the number requested for ranking
-        analyses = await analyze_articles(user, ranked_articles, top_n=top_n) 
-        logger.info(f"Analyses generated for {len(analyses)} articles:")
-        for analysis in analyses:
-            logger.info(f"  - Analysis for: {analysis.title}")
-            logger.info(f"    Summary: {analysis.summary[:50]}...")
-            logger.info(f"    Action: {analysis.recommended_action}")
-
-        logger.info("--- Generating HTML Email ---")
-        # Pass UserContext object, List[RankedArticle], List[ArticleAnalysis]
-        html_output = generate_html_email(user, ranked_articles, analyses)
-        
-        output_path = "arxiv_digest_output.html"
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write(html_output)
-        logger.info(f"HTML email content saved to {output_path}")
-
-    except ValidationError as e:
-        logger.error(f"Pydantic validation error during execution: {e}", exc_info=True)
+        ranked_articles = await rank_articles(user_info, raw_articles) # top_n comes from default
     except Exception as e:
-        logger.error(f"An error occurred in the main execution: {e}", exc_info=True)
+        logger.error(f"Article ranking failed: {e}", exc_info=True)
+        return
+
+    if not ranked_articles:
+        logger.warning("No articles were ranked successfully.")
+        return
+
+    logger.info("Starting article analysis...")
+    try:
+        analyses = await analyze_articles(user_info, ranked_articles) # top_n comes from default
+    except Exception as e:
+        logger.error(f"Article analysis failed: {e}", exc_info=True)
+        # Continue to generate email with ranked articles even if analysis fails
+        analyses = [] 
+
+    # --- Generate Output ---
+    logger.info("Generating HTML email...")
+    html_output = generate_html_email(user_info, ranked_articles, analyses)
+
+    # Save or print the HTML output
+    output_filename = "arxiv_digest.html"
+    with open(output_filename, "w") as f:
+        f.write(html_output)
+    logger.info(f"HTML email saved to {output_filename}")
 
 if __name__ == "__main__":
     asyncio.run(main()) 
