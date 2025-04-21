@@ -1,64 +1,134 @@
 # agent_fixed.py
 
-from __future__ import annotations
+from __future__ import annotations as _annotations
+
 import os
 import asyncio
-import json
-import re
 import logging
-from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+from typing import Any, List, Dict
+import json
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ValidationError, Field, field_validator
-from pydantic_ai import Agent
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic_ai import Agent, RunContext, ModelRetry
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
-from src.agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
-from src.agent_tools import scrape_article, analyze_article
-from crawl4ai import AsyncWebCrawler
 
-from config.settings import AgentSettings
-from src.state import AgentState
+from .agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
+from .agent_tools import scrape_article, analyze_article
+from crawl4ai import AsyncWebCrawler # Import the crawler
 
-# Load environment variables from config directory
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".env"))
+# Load environment variables
+dotenv_path = os.path.join(os.path.dirname(__file__), '..', 'config', '.env')
+if os.path.exists(dotenv_path):
+    load_dotenv(dotenv_path=dotenv_path)
+else:
+    # Fallback to project root if not found in config
+    load_dotenv()
 
-# ========== SETUP LOGGING ==========
+# Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Changed from DEBUG to INFO
-    format='%(levelname)s - %(message)s'  # Simplified format
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
-logger = logging.getLogger("article_rank_agent")
+logger = logging.getLogger("pydantic_arxiv_agent")
 
-# Set other loggers to WARNING to reduce noise
-logging.getLogger("crawl4ai").setLevel(logging.WARNING)
-logging.getLogger("openai").setLevel(logging.WARNING)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# ==============================
+#         DATA MODELS
+# ==============================
 
-# ========== MODELS ==========
 class RankedArticle(BaseModel):
-    """Pydantic model for validating ranked article data"""
+    """Pydantic model for a single ranked article."""
     title: str
     authors: List[str] = Field(min_items=1)
     subject: str
     score_reason: str
     relevance_score: int = Field(ge=0, le=100)
-    abstract_url: Optional[str] = Field(default="")
-    html_url: Optional[str] = Field(default="")
-    pdf_url: Optional[str] = Field(default="")
+    abstract_url: str
+    html_url: str
+    pdf_url: str
 
-    @field_validator('abstract_url', 'html_url', 'pdf_url')
+    @field_validator("authors", mode="before")
     @classmethod
-    def validate_urls(cls, v: Optional[str]) -> str:
-        """Validate URLs, converting None to empty string"""
-        if v is None:
-            return ""
-        return v
+    def ensure_authors_list(cls, v):
+        """Ensure authors is always a List[str], even if malformed input."""
+        if isinstance(v, list):
+            return v or ["Unknown"]
+        if isinstance(v, str):
+            return [v]
+        return ["Unknown"]
+
+    @field_validator("abstract_url", "html_url", "pdf_url", mode="before")
+    @classmethod
+    def normalize_url(cls, v):
+        return v or ""
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def ensure_title(cls, v):
+        return v or "Untitled Article"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_input(cls, values):
+        # Handle synonyms and minimal key consistency
+        if "subjects" in values and "subject" not in values:
+            values["subject"] = values.pop("subjects")
+        if "author" in values and "authors" not in values:
+            # Try to wrap single author
+            authors = values.pop("author")
+            if isinstance(authors, str):
+                values["authors"] = [authors]
+            else:
+                values["authors"] = authors or ["Unknown"]
+        if "score_reason" not in values:
+            values["score_reason"] = "No reason provided"
+        if "relevance_score" not in values:
+            values["relevance_score"] = 0
+        # Clamp relevance_score if string/float
+        score = values.get("relevance_score", 0)
+        if isinstance(score, str) or isinstance(score, float):
+            try:
+                score = int(float(score))
+            except Exception:
+                score = 0
+        values["relevance_score"] = max(0, min(100, int(score)))
+        # URLs from arXiv ID if missing
+        arxiv_id = None
+        for k in ("arxiv_id", "abstract_url", "html_url", "pdf_url"):
+            if k in values and values[k]:
+                arxiv_id = _extract_arxiv_id(values[k])
+                if arxiv_id:
+                    break
+        if arxiv_id:
+            values["abstract_url"] = f"https://arxiv.org/abs/{arxiv_id}"
+            values["html_url"] = f"https://arxiv.org/html/{arxiv_id}"
+            values["pdf_url"] = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+        else:
+            for f in ("abstract_url", "html_url", "pdf_url"):
+                values[f] = values.get(f) or ""
+        return values
+
+def _extract_arxiv_id(url: Any) -> str | None:
+    import re
+    if not isinstance(url, str):
+        return None
+    for pattern in [
+        r'/abs/([^/?&#\s]+)',
+        r'/pdf/([^/?&#\s]+?)(?:\.pdf)?',
+        r'/html/([^/?&#\s]+)',
+        r'arxiv.org[:/]([^/?&#\s]+)'
+    ]:
+        m = re.search(pattern, url)
+        if m:
+            return m.group(1)
+    return None
 
 class ArticleAnalysis(BaseModel):
-    """Pydantic model for article analysis results"""
+    """Analysis result for a single article."""
     title: str
-    authors: List[str] = Field(min_items=1)
+    authors: List[str]
     subject: str
     summary: str
     importance: str
@@ -69,433 +139,274 @@ class ArticleAnalysis(BaseModel):
     relevance_score: int = Field(ge=0, le=100)
     score_reason: str
 
-class BatchAnalysis(BaseModel):
-    """Pydantic model for batch analysis results"""
-    analyses: List[ArticleAnalysis]
-
 class UserContext(BaseModel):
-    """Pydantic model for user context"""
+    """User/researcher profile."""
     name: str
     title: str
     goals: str
 
-# ========== AGENT ==========
-class ArticleRankAgent:
-    """Agent responsible for ranking and analyzing articles"""
-    
-    def __init__(self, settings: AgentSettings, state: AgentState):
-        self.settings = settings
-        self.state = state
-        
-        # Initialize OpenAI model
-        try:
-            self.llm = OpenAIModel(
-                settings.openai_model,
-                provider=OpenAIProvider(api_key=settings.openai_api_key)
-            )
-            logger.info("OpenAI model initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize OpenAI model: {str(e)}")
-            raise
-        
-        # Initialize agent
-        try:
-            self.agent = Agent(
-                self.llm,
-                system_prompt=SYSTEM_PROMPT,
-                retries=1
-            )
-            logger.info("Agent initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Agent: {str(e)}")
-            raise
-    
-    async def rank_articles(
-        self,
-        user_info: Dict[str, str],
-        articles: List[Dict[str, Any]],
-        top_n: int = 5
-    ) -> List[RankedArticle]:
-        """
-        Rank articles based on user information.
-        
-        Args:
-            user_info: Dictionary with user information (name, title, goals)
-            articles: List of article dictionaries
-            top_n: Number of top articles to return
+# ============================
+#      DEPS + AGENT SETUP
+# ============================
+
+@dataclass
+class Deps:
+    agent: Agent      # For prompt-based LLM injection in tools (if needed)
+
+# --- Pydantic AI Agent Definition ---
+
+arxiv_agent = Agent(
+    model=OpenAIModel(
+        os.getenv("OPENAI_MODEL", "gpt-4o"),
+        provider=OpenAIProvider(api_key=os.getenv("OPENAI_API_KEY"))
+    ),
+    system_prompt=SYSTEM_PROMPT,
+    deps_type=Deps,
+    retries=2,
+    response_model=List[RankedArticle],   # Guides LLM to strictly follow schema! (Best practice)
+)
+
+# Note: Tools are imported and registered in agent_tools.py using @arxiv_agent.tool
+
+# ============================
+#     MAIN AGENT LOGIC
+# ============================
+
+async def rank_articles(
+    user_info: dict,
+    articles: list[dict],
+    top_n: int = 5
+) -> List[RankedArticle]:
+    """
+    Runs the LLM to rank articles for the given user profile.
+
+    Args:
+        user_info: {"name": ..., "title": ..., "goals": ...}
+        articles: List of article dicts (raw)
+        top_n: How many top articles to select
+
+    Returns:
+        List of validated RankedArticle objects
+    """
+    user = UserContext(**user_info)
+    input_articles = articles[:20]  # Use a sane LLM upper bound or fetch from env/config
+
+    user_prompt = (
+        f"User profile:\n"
+        f"Name: {user.name}\n"
+        f"Title: {user.title}\n"
+        f"Research Interests: {user.goals}\n\n"
+        f"Now, from the articles JSON below, select the {top_n} most relevant. Output only as valid, pure JSON (see schema)."
+        f"\n\nArticles:\n{input_articles}"
+    )
+
+    try:
+        resp = await arxiv_agent.run(user_prompt)
+        # With response_model=List[RankedArticle], output is auto-validated
+        if not hasattr(resp, 'output') or not isinstance(resp.output, str):
+            logger.error(f"Agent response did not contain the expected string output. Response: {resp}")
+            raise TypeError(f"Agent response output is not a string: {type(resp.output if hasattr(resp, 'output') else resp)}")
+        else:
+            json_string = resp.output
+            logger.debug(f"Received JSON string from agent: {json_string[:200]}...")
             
-        Returns:
-            List of ranked articles
-        """
-        self.state.update_last_processed({"original_articles": articles})
-        
-        limited_articles = articles[:self.settings.max_articles]
-        if len(articles) > self.settings.max_articles:
-            logger.warning(f"Limited to first {self.settings.max_articles} articles")
-        
-        # Compose user message
-        user_message = (
-            f"Here is some information about me:\n"
-            f"Name: {user_info['name']}\n"
-            f"Title: {user_info['title']}\n"
-            f"Research interests: {user_info['goals']}\n\n"
-            f"Below is a list of recent arXiv articles. For each article, you have its title, authors, subject, and the abstract. "
-            f"Please pick the {top_n} most relevant articles for my research interests, and for each, output:\n"
-            "- title\n- authors\n- subject\n- a reasoning why you selected it\n- a relevance score from 0-100\n\n"
-            f"Here are the articles (as JSON):\n\n{json.dumps(limited_articles, indent=2)}\n\n"
-            "Format your response ONLY as valid JSON. Do not include markdown or any extra commentary."
-        )
-        
-        try:
-            response = await self.agent.run(user_message)
-            articles_ranked = self._parse_response(response)
-            logger.info(f"Ranked {len(articles_ranked)} articles")
-            return articles_ranked
-            
-        except Exception as e:
-            logger.error(f"Error ranking articles: {str(e)}")
-            return []
-    
-    async def analyze_ranked_articles(
-        self,
-        user_info: Dict[str, str],
-        ranked_articles: List[RankedArticle],
-        top_n: int = 5
-    ) -> List[ArticleAnalysis]:
-        """
-        Analyze ranked articles in detail.
-        
-        Args:
-            user_info: Dictionary with user information
-            ranked_articles: List of ranked articles
-            top_n: Number of top articles to analyze
-            
-        Returns:
-            List of article analyses
-        """
-        try:
-            articles_to_analyze = ranked_articles[:top_n]
-            user_ctx = UserContext(
-                name=user_info["name"],
-                title=user_info["title"],
-                goals=user_info["goals"]
-            )
-            
-            state_data = self.state.get_last_processed()
-            original_articles = state_data.get("original_articles", [])
-            
-            if not original_articles:
-                logger.error("No original articles found in state")
-                return []
-            
-            analyses = []
-            async with AsyncWebCrawler(verbose=False) as crawler:
-                logger.info(f"Processing {len(articles_to_analyze)} articles")
+            # Manually parse the JSON string and validate with Pydantic model
+            try:
+                data = json.loads(json_string)
+                if not isinstance(data, list):
+                    raise TypeError(f"Parsed JSON is not a list: {type(data)}")
                 
-                for i, article in enumerate(articles_to_analyze):
+                validated_articles = []
+                for item in data:
                     try:
-                        metadata = {
-                            "title": article.title,
-                            "authors": article.authors,
-                            "subject": article.subject,
-                            "relevance_score": article.relevance_score,
-                            "score_reason": article.score_reason
-                        }
-                        
-                        article_data = next(
-                            (a for a in original_articles if a["title"] == article.title),
-                            None
-                        )
-                        
-                        if not article_data:
-                            logger.warning(f"Article data not found: {article.title}")
-                            continue
-                        
-                        article_content = ""
-                        if "body" in article_data and article_data["body"] and len(article_data["body"]) > 50:
-                            article_content = article_data["body"]
-                        elif article.html_url:
-                            article_content = await scrape_article(crawler, article.html_url)
-                            
-                            if not article_content:
-                                logger.warning(f"Failed to get content: {article.title}")
-                                continue
-                        else:
-                            logger.warning(f"No content source for: {article.title}")
-                            continue
-                        
-                        analysis_result = await analyze_article(
-                            self.agent,
-                            article_content,
-                            user_ctx,
-                            metadata
-                        )
-                        
-                        analysis = ArticleAnalysis(
-                            title=article.title,
-                            authors=article.authors,
-                            subject=article.subject,
-                            summary=analysis_result.get("summary", ""),
-                            importance=analysis_result.get("importance", ""),
-                            recommended_action=analysis_result.get("recommended_action", ""),
-                            abstract_url=article.abstract_url,
-                            html_url=article.html_url,
-                            pdf_url=article.pdf_url,
-                            relevance_score=article.relevance_score,
-                            score_reason=article.score_reason
-                        )
-                        analyses.append(analysis)
-                        
-                    except Exception as e:
-                        logger.warning(f"Error analyzing {article.title}: {str(e)}")
-                        continue
+                        validated_article = RankedArticle.model_validate(item)
+                        validated_articles.append(validated_article)
+                    except ValidationError as val_err:
+                        logger.warning(f"Validation failed for article item: {item}. Error: {val_err}")
+                        # Decide whether to skip or handle partially valid data
+                        continue # Skip invalid items for now
+                
+                ranked: List[RankedArticle] = validated_articles
+                
+            except json.JSONDecodeError as json_err:
+                logger.error(f"Failed to decode JSON string from agent response: {json_err}")
+                logger.debug(f"Invalid JSON string: {json_string}")
+                raise
+            except TypeError as type_err:
+                 logger.error(f"Error processing parsed JSON: {type_err}")
+                 raise
             
-            logger.info(f"Completed analysis of {len(analyses)} articles")
-            return analyses
-            
-        except Exception as e:
-            logger.error(f"Error in batch analysis: {str(e)}")
-            return []
-    
-    def _parse_response(self, response: Any) -> List[RankedArticle]:
-        """
-        Parse and validate the LLM response.
-        
-        Args:
-            response: The response from the LLM
-            
-        Returns:
-            List of validated RankedArticle objects
-        """
-        try:
-            if hasattr(response, 'data'):
-                data = json.loads(response.data)
-            elif isinstance(response, str):
-                json_str = self._extract_json(response)
-                data = json.loads(json_str)
-            else:
-                data = response
-            
-            if isinstance(data, dict) and 'papers' in data:
-                data = data['papers']
-            
-            if not isinstance(data, list):
-                logger.error(f"Invalid response format: {type(data)}")
-                return []
-            
-            normalized_articles = []
-            for article in data:
-                try:
-                    normalized = self._normalize_article_data(article)
-                    normalized_articles.append(normalized)
-                except Exception as e:
-                    logger.warning(f"Error normalizing article: {str(e)}")
-                    continue
-            
-            validated_articles = []
-            for article in normalized_articles:
-                try:
-                    validated = RankedArticle.model_validate(article)
-                    validated_articles.append(validated)
-                except ValidationError as e:
-                    logger.warning(f"Validation error for {article.get('title', 'Unknown')}")
-                    continue
-            
-            return validated_articles
-            
-        except Exception as e:
-            logger.error(f"Error parsing response: {str(e)}")
-            return []
-    
-    def _extract_json(self, output: str) -> str:
-        """
-        Extract JSON from LLM output, handling various formats and wrapping.
-        
-        Args:
-            output: The raw output from the LLM
-            
-        Returns:
-            Extracted JSON string
-        """
-        # Try to find a JSON array
-        json_match = re.search(r'\[.*\]', output, flags=re.DOTALL)
-        if json_match:
-            return json_match.group(0)
-        
-        # Try to find a dict with 'papers' key
-        dict_match = re.search(r'\{.*"papers"\s*:\s*\[.*\]\s*\}', output, flags=re.DOTALL)
-        if dict_match:
-            return dict_match.group(0)
-        
-        # If no match found, return the original output
-        return output
-    
-    def _normalize_article_data(self, article: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Normalize article data to handle synonym keys and ensure consistent structure.
-        
-        Args:
-            article: Raw article dictionary
-            
-        Returns:
-            Normalized article dictionary
-        """
-        normalized = article.copy()
-        
-        # Handle subject/subjects synonym
-        if "subjects" in normalized and "subject" not in normalized:
-            normalized["subject"] = normalized["subjects"]
-        elif "subject" not in normalized:
-            normalized["subject"] = "Not specified"
-        
-        # Ensure authors is a list
-        if "authors" not in normalized and "author" in normalized:
-            if isinstance(normalized["author"], str):
-                normalized["authors"] = [normalized["author"]]
-            elif isinstance(normalized["author"], list):
-                normalized["authors"] = normalized["author"]
-            else:
-                normalized["authors"] = ["Unknown"]
-        elif "authors" not in normalized:
-            normalized["authors"] = ["Unknown"]
-        elif not isinstance(normalized["authors"], list):
-            try:
-                if isinstance(normalized["authors"], str):
-                    normalized["authors"] = [normalized["authors"]]
-                else:
-                    normalized["authors"] = list(normalized["authors"])
-            except:
-                normalized["authors"] = ["Unknown"]
-        
-        # Ensure at least one author
-        if not normalized["authors"]:
-            normalized["authors"] = ["Unknown"]
-        
-        # Ensure relevance_score is an integer
-        if "relevance_score" in normalized:
-            try:
-                if isinstance(normalized["relevance_score"], str):
-                    normalized["relevance_score"] = int(float(normalized["relevance_score"]))
-                elif isinstance(normalized["relevance_score"], float):
-                    normalized["relevance_score"] = int(normalized["relevance_score"])
-            except (ValueError, TypeError):
-                normalized["relevance_score"] = 0
-        else:
-            normalized["relevance_score"] = 0
-        
-        # Clamp relevance score to valid range
-        normalized["relevance_score"] = max(0, min(100, normalized["relevance_score"]))
-        
-        # Ensure title is a string
-        if not normalized.get("title"):
-            normalized["title"] = "Untitled Article"
-        elif not isinstance(normalized["title"], str):
-            try:
-                normalized["title"] = str(normalized["title"])
-            except:
-                normalized["title"] = "Untitled Article"
-        
-        # Try to extract arxiv_id and construct URLs
-        arxiv_id = None
-        
-        # Function to safely extract arxiv_id from URL
-        def extract_arxiv_id(url: Any) -> Optional[str]:
-            if not isinstance(url, str):
-                return None
-            patterns = [
-                r'/abs/([^/\s]+)',
-                r'/pdf/([^/\s]+?)(?:\.pdf)?$',
-                r'/html/([^/\s]+)',
-                r'arxiv.org[:/]([^/\s]+)'
-            ]
-            for pattern in patterns:
-                match = re.search(pattern, url)
-                if match:
-                    return match.group(1)
-            return None
-        
-        # Try to get arxiv_id from various sources
-        sources = [
-            ("arxiv_id", normalized.get("arxiv_id")),
-            ("abstract_url", normalized.get("abstract_url")),
-            ("html_url", normalized.get("html_url")),
-            ("pdf_url", normalized.get("pdf_url"))
-        ]
-        
-        for source_name, source_value in sources:
-            if source_value:
-                if source_name == "arxiv_id":
-                    arxiv_id = str(source_value)
-                    break
-                extracted = extract_arxiv_id(source_value)
-                if extracted:
-                    arxiv_id = extracted
-                    break
-        
-        # Clean arxiv_id if found
-        if arxiv_id:
-            # Remove any 'arxiv:' prefix
-            arxiv_id = re.sub(r'^arxiv:', '', arxiv_id, flags=re.IGNORECASE)
-            # Remove any file extension
-            arxiv_id = re.sub(r'\.pdf$', '', arxiv_id, flags=re.IGNORECASE)
-            
-            # Construct URLs
-            normalized["abstract_url"] = f"https://arxiv.org/abs/{arxiv_id}"
-            normalized["html_url"] = f"https://arxiv.org/html/{arxiv_id}"
-            normalized["pdf_url"] = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-        else:
-            # If no valid arxiv_id found, set empty URLs
-            normalized["abstract_url"] = ""
-            normalized["html_url"] = ""
-            normalized["pdf_url"] = ""
-        
-        # Ensure all required fields are present with valid values
-        required_fields = {
-            "title": "Untitled Article",
-            "authors": ["Unknown"],
-            "subject": "Not specified",
-            "score_reason": "No reason provided",
-            "relevance_score": 0,
-            "abstract_url": "",
-            "html_url": "",
-            "pdf_url": ""
-        }
-        
-        for field, default_value in required_fields.items():
-            if field not in normalized or normalized[field] is None:
-                normalized[field] = default_value
-                logger.warning(f"Missing required field '{field}' in article data, using default: {default_value}")
-        
-        return normalized
+        logger.info(f"Returned {len(ranked)} ranked articles.")
+        return ranked
+    except ValidationError as e:
+        logger.error(f"LLM output failed schema validation:\n{e}")
+        # Optionally extract partial data here if needed
+        raise
+    except Exception as e:
+        logger.error(f"Error ranking articles: {e}")
+        raise
 
-# ========= MAIN LOGIC =========
+async def analyze_articles(
+    user_info: dict,
+    articles: List[RankedArticle],
+    top_n: int = 5
+) -> List[ArticleAnalysis]:
+    """
+    Get LLM-generated analyses for the most relevant articles.
+
+    Args:
+        user_info: Dict of user profile details
+        articles: Output of rank_articles
+        top_n: Number of articles to analyze
+
+    Returns:
+        List of ArticleAnalysis objects
+    """
+    # Prepare dependencies for tool usage
+    user = UserContext(**user_info)
+    analyses = []
+    
+    # Create crawler instance once, outside the loop
+    async with AsyncWebCrawler(verbose=False) as crawler:
+        logger.info(f"Analyzing top {min(top_n, len(articles))} articles...")
+        for art in articles[:top_n]:
+            try:
+                article_metadata = art.model_dump()
+                
+                # Pass the crawler instance to scrape_article
+                article_content = await scrape_article(crawler, art.html_url)
+                
+                if not article_content:
+                    logger.warning(f"Skipping analysis for '{art.title}' (scraping failed or no content)")
+                    continue
+                
+                # NOTE: analyze_article currently returns dummy data
+                analysis_dict = await analyze_article(
+                    arxiv_agent, # Pass the agent instance
+                    article_content=article_content,
+                    user_context=user,
+                    article_metadata=article_metadata
+                )
+                analyses.append(ArticleAnalysis(
+                    **article_metadata,
+                    summary=analysis_dict.get("summary", ""),
+                    importance=analysis_dict.get("importance", ""),
+                    recommended_action=analysis_dict.get("recommended_action", "")
+                ))
+            except Exception as e:
+                # Log the exception details for the specific article
+                logger.error(f"Failed to analyze article '{art.title}': {e}", exc_info=True)
+                continue # Continue to the next article
+                
+    logger.info(f"Completed analysis for {len(analyses)} articles.")
+    return analyses
+
+# ============================
+#       HTML GENERATION
+# ============================
+
+def generate_html_email(
+    user_info: Dict,
+    ranked_articles: List[RankedArticle],
+    analyses: List[ArticleAnalysis]
+) -> str:
+    """Formats the ranked articles and analyses into an HTML string for email."""
+    
+    html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<title>ArXiv Digest for {user_info.get('name', 'Researcher')}</title>
+<style>
+  body {{ font-family: sans-serif; line-height: 1.6; }}
+  h1, h2, h3 {{ color: #333; }}
+  ul {{ list-style-type: none; padding: 0; }}
+  li {{ margin-bottom: 20px; border: 1px solid #eee; padding: 15px; border-radius: 5px; }}
+  .score {{ font-weight: bold; }}
+  .links a {{ margin-right: 10px; text-decoration: none; color: #007bff; }}
+  .analysis {{ margin-top: 10px; background-color: #f9f9f9; padding: 10px; border-radius: 4px; }}
+</style>
+</head>
+<body>
+
+<h1>ArXiv Digest for {user_info.get('name', 'Researcher')}</h1>
+<p>Based on your interests: {user_info.get('goals', 'N/A')}</p>
+
+<h2>Top Ranked Articles</h2>
+<ul>
+"""
+    
+    # Create a mapping from abstract_url to analysis for easy lookup
+    analysis_map = {a.abstract_url: a for a in analyses}
+
+    for rank_art in ranked_articles:
+        html_content += f"""
+  <li>
+    <h3>{rank_art.title}</h3>
+    <p>Authors: {', '.join(rank_art.authors)}</p>
+    <p>Subject: {rank_art.subject}</p>
+    <p><span class="score">Relevance Score: {rank_art.relevance_score}/100</span> - {rank_art.score_reason}</p>
+    <p class="links">
+      <a href="{rank_art.abstract_url}" target="_blank">Abstract</a> | 
+      <a href="{rank_art.html_url}" target="_blank">HTML</a> | 
+      <a href="{rank_art.pdf_url}" target="_blank">PDF</a>
+    </p>
+"""
+        # Add analysis if available
+        analysis = analysis_map.get(rank_art.abstract_url)
+        if analysis:
+            html_content += f"""
+    <div class="analysis">
+      <h4>Analysis:</h4>
+      <p><strong>Summary:</strong> {analysis.summary}</p>
+      <p><strong>Importance:</strong> {analysis.importance}</p>
+      <p><strong>Recommended Action:</strong> {analysis.recommended_action}</p>
+    </div>
+"""
+        html_content += "  </li>\n"
+
+    html_content += """
+</ul>
+
+</body>
+</html>
+"""
+    return html_content
+
+# ============================
+#          MAIN
+# ============================
+
 async def main():
-    """Run the article ranking agent with a sample user."""
-    logger.info("Initializing article ranking agent")
-
-    # Initialize settings and state
-    settings = AgentSettings()
-    state = AgentState()
-    
-    # Initialize agent
-    agent = ArticleRankAgent(settings, state)
-
-    # User info (hardcoded for demonstration, could load from user input)
-    user_info = {
+    """Standalone test: rank and analyze articles with demo user/article set."""
+    sample_user = {
         "name": "Dr. Jane Smith",
-        "title": "Computer Science Professor",
-        "goals": "I'm researching new approaches to natural language processing and looking for papers on transformer architectures and their applications."
+        "title": "Professor",
+        "goals": "Transformer architectures and NLP applications"
     }
-
+    
     # Load articles from file or use demo data
-    arxiv_file = os.getenv("ARXIV_FILE", "arxiv_cs_submissions_2025-04-01.json")
-    if os.path.exists(arxiv_file):
-        with open(arxiv_file, "r") as f:
-            articles = json.load(f)
-        logger.info(f"Loaded {len(articles)} articles from {arxiv_file}.")
+    default_arxiv_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'arxiv_cs_submissions_2025-04-01.json')
+    arxiv_file_path = os.getenv("ARXIV_FILE", default_arxiv_file)
+    
+    articles_to_process = []
+    if os.path.exists(arxiv_file_path):
+        try:
+            with open(arxiv_file_path, "r") as f:
+                articles_to_process = json.load(f)
+            logger.info(f"Loaded {len(articles_to_process)} articles from {arxiv_file_path}.")
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from {arxiv_file_path}: {e}")
+            logger.warning("Falling back to sample data due to JSON error.")
+        except Exception as e:
+             logger.error(f"Error reading file {arxiv_file_path}: {e}")
+             logger.warning("Falling back to sample data due to file reading error.")
     else:
-        logger.warning(f"Warning: {arxiv_file} not found. Using sample data.")
-        articles = [
+        logger.warning(f"Warning: {arxiv_file_path} not found. Using sample data.")
+
+    # Use sample data as fallback if file loading failed or file not found
+    if not articles_to_process:
+         articles_to_process = [
             {
                 "arxiv_id": "2403.12345",
                 "title": "Advanced Transformer Architectures for NLP",
@@ -513,73 +424,37 @@ async def main():
                 "abstract_url": "https://arxiv.org/abs/2403.12346",
                 "pdf_url": "https://arxiv.org/pdf/2403.12346.pdf",
                 "html_url": "https://arxiv.org/html/2403.12346"
-            },
-            {
-                "arxiv_id": "2403.12347",
-                "title": "Quantum Computing Algorithms",
-                "subjects": "quant-ph",
-                "authors": ["Charlie Brown", "Diana Ross"],
-                "abstract_url": "https://arxiv.org/abs/2403.12347",
-                "pdf_url": "https://arxiv.org/pdf/2403.12347.pdf",
-                "html_url": "https://arxiv.org/html/2403.12347"
             }
         ]
-    
+
     # Get number of top articles from environment or use default
     top_n = int(os.getenv("TOP_N_ARTICLES", "5"))
-    
-    # Rank articles
-    articles_ranked = await agent.rank_articles(user_info, articles, top_n=top_n)
-    
-    if not articles_ranked:
-        logger.error("Failed to rank articles")
-        return
-    
-    # After ranking articles, analyze them
-    analyses = await agent.analyze_ranked_articles(user_info, articles_ranked)
-    
-    # Print results
-    print("\n" + "=" * 80)
-    print(f"TOP {len(articles_ranked)} RELEVANT PAPERS FOR {user_info['name']}")
-    print("=" * 80)
-    
-    for i, article in enumerate(articles_ranked, 1):
-        print(f"\n{i}. {article.title}")
-        print(f"   Authors: {', '.join(article.authors)}")
-        print(f"   Subject: {article.subject}")
-        print(f"   Relevance Score: {article.relevance_score}/100")
-        print(f"   Reasoning: {article.score_reason}")
-        print(f"   URLs:")
-        print(f"     - Abstract: {article.abstract_url}")
-        print(f"     - HTML: {article.html_url}")
-        print(f"     - PDF: {article.pdf_url}")
-        print("-" * 80)
 
-    # Print analyses
-    if analyses:
-        print("\n" + "=" * 80)
-        print("ARTICLE ANALYSES")
-        print("=" * 80)
-        
-        for i, analysis in enumerate(analyses, 1):
-            print(f"\n{i}. {analysis.title}")
-            print(f"   Authors: {', '.join(analysis.authors)}")
-            print(f"   Subject: {analysis.subject}")
-            print(f"   Relevance Score: {analysis.relevance_score}/100")
-            print("\n   SUMMARY:")
-            print(f"   {analysis.summary}")
-            print("\n   IMPORTANCE:")
-            print(f"   {analysis.importance}")
-            print("\n   RECOMMENDED ACTION:")
-            print(f"   {analysis.recommended_action}")
-            print("-" * 80)
-    else:
-        print("\n" + "=" * 80)
-        print("NO ARTICLE ANALYSES AVAILABLE")
-        print("=" * 80)
-        print("This may be due to scraping issues with the arXiv website.")
-        print("You can still access the articles directly using the URLs provided above.")
-        print("=" * 80)
+    # Use the loaded (or sample) articles
+    ranked = await rank_articles(sample_user, articles_to_process, top_n=top_n)
+    analyses = await analyze_articles(sample_user, ranked, top_n=top_n)
+    
+    # Generate HTML content
+    html_output = generate_html_email(sample_user, ranked, analyses)
+    
+    # Define output path in the project root
+    output_file_path = os.path.join(os.path.dirname(__file__), '..', 'email_output.html')
+    
+    # Save the HTML to a file
+    try:
+        with open(output_file_path, "w", encoding="utf-8") as f:
+            f.write(html_output)
+        logger.info(f"Successfully generated HTML email report at: {output_file_path}")
+    except IOError as e:
+        logger.error(f"Failed to write HTML email report to {output_file_path}: {e}")
+
+    # Keep original print statements for console feedback during testing if needed
+    # print("\n--- Ranked Articles ---")
+    # for art in ranked:
+    #     print(f"{art.title} (Score: {art.relevance_score}) – {art.score_reason}")
+    # print("\n--- Article Analyses ---")    
+    # for a in analyses:
+    #     print(f"\n{a.title}\nSummary: {a.summary}\nImportance: {a.importance}\nAction: {a.recommended_action}")
 
 if __name__ == "__main__":
     asyncio.run(main()) 

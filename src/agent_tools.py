@@ -11,10 +11,11 @@ from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
 from src.agent_prompts import ARTICLE_ANALYSIS_PROMPT
 import random
 import re
+from pydantic_ai import Agent
 
 # Set up logging for this module
-logger = logging.getLogger("article_analyzer")
-logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("arxiv_agent_tools")
+logger.setLevel(logging.INFO)
 
 # Create console handler with formatting if it doesn't exist
 if not logger.handlers:
@@ -94,215 +95,86 @@ schema_content = {
 # ========== TOOLS ==========
 async def scrape_article(crawler: AsyncWebCrawler, url: str) -> str:
     """
-    Scrape article content from arXiv URL using a provided crawler instance.
-    
+    Scrape content from an arXiv article's HTML page.
+
     Args:
-        crawler: An active AsyncWebCrawler instance
-        url: The URL of the article to scrape
-        
+        crawler: An active AsyncWebCrawler instance.
+        url: The HTML or abstract URL of the article.
+
     Returns:
-        The article content as a string
+        String with main article content, or empty on error.
     """
-    logger.info(f"Starting to scrape article from URL: {url}")
-    
-    # Convert abstract URL to HTML URL if needed
     if "/abs/" in url:
         url = url.replace("/abs/", "/html/")
-        logger.info(f"Converted abstract URL to HTML URL: {url}")
-    
-    # Define the schema for extracting article content
-    schema = {
+    c_schema = {
         "name": "ArXiv Article Content",
-        "baseSelector": "article.ltx_document",  # Main article container
+        "baseSelector": "article.ltx_document",
         "fields": [
-            {
-                "name": "title",
-                "selector": "h1.ltx_title.ltx_title_document",
-                "type": "text",
-                "default": None
-            },
-            {
-                "name": "authors",
-                "selector": "div.ltx_authors span.ltx_personname",
-                "type": "list",
-                "fields": [
-                    {"name": "author_name", "type": "text"}
-                ]
-            },
-            {
-                "name": "abstract",
-                "selector": "div.ltx_abstract p.ltx_p",
-                "type": "text",
-                "default": None
-            },
-            {
-                "name": "keywords",
-                "selector": "div.ltx_keywords",
-                "type": "text",
-                "default": None
-            },
-            {
-                "name": "sections",
-                "selector": "section.ltx_section",
-                "type": "list",
-                "fields": [
-                    {
-                        "name": "heading",
-                        "selector": "h2.ltx_title_section",
-                        "type": "text"
-                    },
-                    {
-                        "name": "content",
-                        "selector": "div.ltx_para p.ltx_p",
-                        "type": "text"
-                    }
-                ]
-            }
+            {"name": "title", "selector": "h1.ltx_title.ltx_title_document", "type": "text"},
+            {"name": "authors", "selector": "div.ltx_authors span.ltx_personname", "type": "list",
+                "fields": [{"name": "author_name", "type": "text"}]},
+            {"name": "abstract", "selector": "div.ltx_abstract p.ltx_p", "type": "text"},
         ]
     }
-    
-    logger.debug("Created extraction schema for arXiv article page")
-    
-    # Configure crawler
     config = CrawlerRunConfig(
-        extraction_strategy=JsonCssExtractionStrategy(schema, verbose=True),
-        word_count_threshold=10,
-        excluded_tags=["nav", "footer", "header", "script", "style"],
-        exclude_external_links=True,
-        process_iframes=False,
-        wait_for="article.ltx_document",  # Wait for the article content to load
+        extraction_strategy=JsonCssExtractionStrategy(c_schema, verbose=False),
         cache_mode=CacheMode.BYPASS,
-        page_timeout=30000
+        page_timeout=25000 # Consider increasing if timeouts persist
     )
-    
-    logger.debug("Configured crawler with waiting for article content")
-    
-    # Try to scrape the article with retries
-    max_retries = 2  # Increased retries
-    for attempt in range(max_retries):
-        try:
-            logger.info(f"Attempt {attempt + 1}/{max_retries} to scrape article")
-            result = await crawler.arun(url=url, config=config)
-            logger.debug(f"Crawler run completed. Success: {result.success}")
+
+    try:
+        # Use the provided crawler instance
+        result = await crawler.arun(url=url, config=config)
+        if result.success and result.extracted_content:
+            import json
+            try:
+                parsed_data = json.loads(result.extracted_content)
+            except json.JSONDecodeError as json_err:
+                logger.warning(f"Failed to parse extracted JSON for {url}: {json_err}")
+                # Fall through to check cleaned_html
+                parsed_data = None
             
-            if not result.success:
-                logger.error(f"Failed to scrape article (attempt {attempt + 1}): {result.error_message}")
-                if attempt < max_retries - 1:
-                    logger.info(f"Waiting 3 seconds before retry {attempt + 2}")
-                    await asyncio.sleep(3)  # Increased delay
-                    continue
-                return ""
-            
-            if result.extracted_content:
-                try:
-                    logger.debug("Attempting to parse extracted content as JSON")
-                    data = json.loads(result.extracted_content)
-                    content_parts = []
-                    
-                    # Handle both list and dictionary responses
-                    if isinstance(data, list):
-                        # Take the first item if it's a list
-                        data = data[0] if data else {}
-                    
-                    # Extract title
-                    if data.get("title"):
-                        logger.debug(f"Found title: {data['title'][:50]}...")
-                        content_parts.append(f"Title: {data['title'].strip()}")
-                    else:
-                        logger.warning("No title found in extracted content")
-                    
-                    # Extract authors
-                    if data.get("authors"):
-                        authors = [author.get("author_name", "") for author in data["authors"]]
-                        logger.debug(f"Found {len(authors)} authors")
-                        content_parts.append(f"Authors: {', '.join(authors)}")
-                    else:
-                        logger.warning("No authors found in extracted content")
-                    
-                    # Extract subjects
-                    if data.get("primary_subject"):
-                        content_parts.append(f"Primary Subject: {data['primary_subject'].strip()}")
-                    if data.get("keywords"):
-                        keywords = [kw.strip() for kw in data["keywords"].split(",")]
-                        content_parts.append(f"Keywords: {', '.join(keywords)}")
-                    
-                    # Extract abstract
-                    if data.get("abstract"):
-                        logger.debug("Found abstract")
-                        content_parts.extend(["", "Abstract:", data["abstract"].strip()])
-                    else:
-                        logger.warning("No abstract found in extracted content")
-                    
-                    if content_parts:
-                        logger.info(f"Successfully extracted {len(content_parts)} content parts")
-                        return "\n\n".join(content_parts)
-                    else:
-                        logger.warning("No content parts extracted from structured data")
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse extracted content as JSON: {e}")
-                    if attempt < max_retries - 1:
-                        await asyncio.sleep(3)
-                        continue
-                    return ""
-            
-            # If we have cleaned HTML but no extracted content, try to extract manually
-            elif result.cleaned_html:
-                logger.info("Attempting manual extraction from cleaned HTML")
-                soup = BeautifulSoup(result.cleaned_html, "html.parser")
-                content_parts = []
-                
-                # Extract title (try both formats)
-                title = soup.select_one("h1.title, h1.ltx_title_document")
-                if title:
-                    logger.debug(f"Found title manually: {title.get_text(strip=True)[:50]}...")
-                    content_parts.append(f"Title: {title.get_text(strip=True)}")
-                else:
-                    logger.warning("No title found in manual extraction")
-                
-                # Extract authors (try both formats)
-                authors = soup.select("div.authors a, div.ltx_authors span.ltx_personname")
-                if authors:
-                    logger.debug(f"Found {len(authors)} authors manually")
-                    content_parts.append(f"Authors: {', '.join(a.get_text(strip=True) for a in authors)}")
-                else:
-                    logger.warning("No authors found in manual extraction")
-                
-                # Extract abstract (try both formats)
-                abstract = soup.select_one("blockquote.abstract, div.ltx_abstract p.ltx_p")
-                if abstract:
-                    logger.debug("Found abstract manually")
-                    content_parts.extend(["", "Abstract:", abstract.get_text(strip=True)])
-                else:
-                    logger.warning("No abstract found in manual extraction")
-                
-                if content_parts:
-                    logger.info(f"Successfully extracted {len(content_parts)} content parts manually")
-                    return "\n\n".join(content_parts)
-                
-                logger.warning("No content found in manual extraction")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(3)
-                    continue
-                return ""
+            article_dict = None
+            if isinstance(parsed_data, list) and parsed_data:
+                 # If it's a non-empty list, take the first item
+                 if isinstance(parsed_data[0], dict):
+                     article_dict = parsed_data[0]
+                 else:
+                     logger.warning(f"First item in extracted list for {url} is not a dictionary: {type(parsed_data[0])}")
+            elif isinstance(parsed_data, dict):
+                 # If it's already a dictionary
+                 article_dict = parsed_data
             else:
-                logger.error("No content extracted (neither structured nor HTML)")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(3)
-                    continue
-                return ""
+                 logger.warning(f"Parsed extracted content for {url} is not a list or dict: {type(parsed_data)}")
             
-        except Exception as e:
-            logger.error(f"Error scraping article (attempt {attempt + 1}): {str(e)}", exc_info=True)
-            if "Target page, context or browser" in str(e):
-                logger.critical(f"Detected potential Playwright state issue. Exiting scrape attempt.")
-                return ""  # Don't retry if browser state seems broken
-            if attempt < max_retries - 1:
-                await asyncio.sleep(3)
-                continue
-            return ""
-    
-    logger.error("All scraping attempts failed")
-    return ""
+            if article_dict:
+                 # Now safely access fields using .get()
+                 title = article_dict.get('title', '')
+                 authors_list = article_dict.get('authors', [])
+                 authors_str = ', '.join(a.get('author_name', '') for a in authors_list if isinstance(a, dict))
+                 abstract = article_dict.get('abstract', '')
+                 
+                 content_parts = filter(None, [
+                     f"Title: {title}" if title else None,
+                     f"Authors: {authors_str}" if authors_str else None,
+                     f"Abstract: {abstract}" if abstract else None
+                 ])
+                 return '\n\n'.join(content_parts) # Use double newline for readability
+            # If article_dict is None, fall through to check cleaned_html
+                 
+        if result.cleaned_html:
+            soup = BeautifulSoup(result.cleaned_html, "html.parser")
+            title = soup.select_one("h1.title, h1.ltx_title_document")
+            abstract = soup.select_one("blockquote.abstract, div.ltx_abstract p.ltx_p")
+            return '\n'.join(filter(None, [
+                f"Title: {title.get_text(strip=True) if title else ''}",
+                f"Abstract: {abstract.get_text(strip=True) if abstract else ''}"
+            ]))
+        logger.warning(f"Article scrape failed for {url}; no content extracted.")
+        return ""
+    except Exception as e:
+        logger.error(f"Scraping error for {url}: {e}", exc_info=True)
+        return ""
 
 async def scrape_articles_batch(urls: List[str], max_concurrent: int = 3) -> Dict[str, str]:
     """
@@ -353,20 +225,26 @@ async def scrape_articles_batch(urls: List[str], max_concurrent: int = 3) -> Dic
     
     return content_dict
 
-async def analyze_article(ctx: Any, article_text: str, user_context: Any, article_metadata: Dict[str, Any]) -> dict:
+async def analyze_article(
+    agent: Agent,
+    article_content: str,
+    user_context: Any,
+    article_metadata: Dict[str, Any]
+) -> Dict[str, str]:
     """
-    Analyze article content using LLM.
+    Analyze an article using the LLM agent.
+    Formats the prompt using ARTICLE_ANALYSIS_PROMPT and runs the agent.
+    Returns the structured analysis result.
 
     Args:
-        ctx: Run context
-        article_text: Scraped article content
-        user_context: User context (goals, career)
-        article_metadata: Article metadata from ranking agent
+        agent: The arxiv_agent instance (or any compatible agent).
+        article_content: Main body text.
+        user_context: UserContext object.
+        article_metadata: Metadata from RankedArticle.
 
     Returns:
-        Structured analysis result
+        Dict with keys: summary, importance, recommended_action
     """
-    # Format prompt with article content and user context
     prompt = ARTICLE_ANALYSIS_PROMPT.format(
         goals=user_context.goals,
         title=user_context.title,
@@ -374,204 +252,48 @@ async def analyze_article(ctx: Any, article_text: str, user_context: Any, articl
         article_title=article_metadata["title"],
         authors=", ".join(article_metadata["authors"]),
         subject=article_metadata["subject"],
-        content=article_text
+        content=article_content
     )
-
-    # Run LLM
+    # For direct use: this method expects an agent to be called elsewhere.
+    # In usage with the Agent, the agent.run() will be called with this prompt.
+    
+    # Run the agent with the formatted prompt
     try:
-        # Check if ctx is an Agent object or has an agent attribute
-        if hasattr(ctx, 'run'):
-            response = await ctx.run(prompt)
-        elif hasattr(ctx, 'agent') and hasattr(ctx.agent, 'run'):
-            response = await ctx.agent.run(prompt)
-        else:
-            logger.error(f"Invalid context object: {ctx}")
-            return {
-                "summary": "Failed to generate summary - invalid context object",
-                "importance": "Failed to determine importance",
-                "recommended_action": "No action recommended"
-            }
-
-        # Extract response data
-        if hasattr(response, 'data'):
-            response_text = response.data
+        # The agent.run result might be an AgentRunResult object or just the string
+        # We expect a string based on previous tests, but handle both
+        response = await agent.run(prompt)
+        
+        response_text = ""
+        if hasattr(response, 'output') and isinstance(response.output, str):
+             response_text = response.output
         elif isinstance(response, str):
-            response_text = response
+             response_text = response
         else:
-            logger.error(f"Unexpected response type: {type(response)}")
-            return {
-                "summary": "Failed to generate summary - unexpected response type",
-                "importance": "Failed to determine importance",
-                "recommended_action": "No action recommended"
-            }
-
-    except Exception as e:
-        logger.error(f"Error running LLM for analysis: {e}")
-        return {
-            "summary": "Failed to generate summary",
-            "importance": "Failed to determine importance",
-            "recommended_action": "No action recommended"
-        }
-
-    # Parse and structure response
-    try:
-        # Clean up the response text
-        response_text = response_text.strip()
+             logger.warning(f"Unexpected response type from agent.run for analysis: {type(response)}")
+             # Attempt to stringify
+             try:
+                 response_text = str(response.output if hasattr(response, 'output') else response)
+             except Exception:
+                 response_text = ""
         
-        # Try to extract sections using regex patterns
-        import re
+        if not response_text:
+             raise ValueError("Agent returned empty or non-string response for analysis")
+             
+        # Parse the structured response (Summary\n\nImportance\n\nAction)
+        parts = response_text.strip().split('\n\n', 2)
+        summary = parts[0].replace("Summary", "").strip() if len(parts) > 0 else ""
+        importance = parts[1].replace("Importance", "").strip() if len(parts) > 1 else ""
+        action = parts[2].replace("Recommended Action", "").strip() if len(parts) > 2 else ""
         
-        # Look for explicit section headers
-        summary_match = re.search(r'Summary\s*(.*?)(?=\s*Importance|\s*Recommended Action|\Z)', 
-                                 response_text, re.DOTALL | re.IGNORECASE)
-        importance_match = re.search(r'Importance\s*(.*?)(?=\s*Recommended Action|\Z)', 
-                                    response_text, re.DOTALL | re.IGNORECASE)
-        action_match = re.search(r'Recommended Action\s*(.*?)(?=\Z)', 
-                                response_text, re.DOTALL | re.IGNORECASE)
-        
-        # If we found explicit headers, use those sections
-        if summary_match and importance_match and action_match:
-            summary = summary_match.group(1).strip()
-            importance = importance_match.group(1).strip()
-            action = action_match.group(1).strip()
-        else:
-            # Fall back to splitting by double newlines
-            sections = response_text.split("\n\n")
-            
-            # Remove any section headers that might be in the text
-            cleaned_sections = []
-            for section in sections:
-                # Remove common section headers
-                cleaned = re.sub(r'^(Summary|Importance|Recommended Action):?\s*', '', 
-                                section.strip(), flags=re.IGNORECASE)
-                cleaned_sections.append(cleaned)
-            
-            # Assign sections based on position
-            summary = cleaned_sections[0] if len(cleaned_sections) > 0 else ""
-            importance = cleaned_sections[1] if len(cleaned_sections) > 1 else ""
-            action = cleaned_sections[2] if len(cleaned_sections) > 2 else ""
-            
-            # If we still don't have content, try to extract from the original text
-            if not summary and not importance and not action:
-                # Last resort: try to extract meaningful content from the original text
-                paragraphs = response_text.split("\n")
-                if len(paragraphs) >= 3:
-                    summary = paragraphs[0]
-                    importance = paragraphs[1]
-                    action = paragraphs[2]
-                elif len(paragraphs) == 2:
-                    summary = paragraphs[0]
-                    importance = paragraphs[1]
-                    action = "No specific action recommended."
-                elif len(paragraphs) == 1:
-                    summary = paragraphs[0]
-                    importance = "Importance not specified."
-                    action = "No specific action recommended."
-                else:
-                    summary = "No summary available."
-                    importance = "Importance not specified."
-                    action = "No specific action recommended."
-
-        # Clean up any remaining section headers
-        summary = re.sub(r'^(Summary|Importance|Recommended Action):?\s*', '', 
-                        summary.strip(), flags=re.IGNORECASE)
-        importance = re.sub(r'^(Summary|Importance|Recommended Action):?\s*', '', 
-                           importance.strip(), flags=re.IGNORECASE)
-        action = re.sub(r'^(Summary|Importance|Recommended Action):?\s*', '', 
-                       action.strip(), flags=re.IGNORECASE)
-
         return {
             "summary": summary,
             "importance": importance,
             "recommended_action": action
         }
     except Exception as e:
-        logger.error(f"Failed to parse LLM response: {e}")
+        logger.error(f"Error running LLM for analysis via agent: {e}", exc_info=True)
         return {
-            "summary": "Failed to generate summary",
-            "importance": "Failed to determine importance",
-            "recommended_action": "No action recommended"
-        }
-
-def _normalize_article_data(self, article: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Normalize article data to handle synonym keys and ensure consistent structure.
-    
-    Args:
-        article: Raw article dictionary
-        
-    Returns:
-        Normalized article dictionary
-    """
-    normalized = article.copy()
-    
-    # Handle subject/subjects synonym
-    if "subjects" in normalized and "subject" not in normalized:
-        normalized["subject"] = normalized["subjects"]
-    elif "subject" not in normalized:
-        normalized["subject"] = "Not specified"
-    
-    # Ensure authors is a list
-    if "authors" not in normalized and "author" in normalized:
-        if isinstance(normalized["author"], str):
-            normalized["authors"] = [normalized["author"]]
-        else:
-            normalized["authors"] = normalized["author"]
-    elif "authors" not in normalized:
-        normalized["authors"] = ["Unknown"]
-    
-    # Ensure relevance_score is an integer
-    if "relevance_score" in normalized and isinstance(normalized["relevance_score"], str):
-        try:
-            normalized["relevance_score"] = int(normalized["relevance_score"])
-        except ValueError:
-            normalized["relevance_score"] = 0
-    
-    # Ensure all URLs are present
-    arxiv_id = None
-    
-    # Try to extract arxiv_id from various sources
-    if "arxiv_id" in normalized:
-        arxiv_id = normalized["arxiv_id"]
-    elif "abstract_url" in normalized:
-        match = re.search(r'/abs/([^/]+)', normalized["abstract_url"])
-        if match:
-            arxiv_id = match.group(1)
-    elif "html_url" in normalized:
-        match = re.search(r'/html/([^/]+)', normalized["html_url"])
-        if match:
-            arxiv_id = match.group(1)
-    elif "pdf_url" in normalized:
-        match = re.search(r'/pdf/([^/]+)', normalized["pdf_url"])
-        if match:
-            arxiv_id = match.group(1)
-    
-    # If we found an arxiv_id, use it to construct missing URLs
-    if arxiv_id:
-        if not normalized.get("abstract_url"):
-            normalized["abstract_url"] = f"https://arxiv.org/abs/{arxiv_id}"
-        if not normalized.get("html_url"):
-            normalized["html_url"] = f"https://arxiv.org/html/{arxiv_id}"
-        if not normalized.get("pdf_url"):
-            normalized["pdf_url"] = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-    else:
-        # If no arxiv_id found, set default URLs
-        if not normalized.get("abstract_url"):
-            normalized["abstract_url"] = ""
-        if not normalized.get("html_url"):
-            normalized["html_url"] = ""
-        if not normalized.get("pdf_url"):
-            normalized["pdf_url"] = ""
-    
-    # Ensure all required fields are present
-    required_fields = ["title", "authors", "subject", "relevance_score",
-                      "abstract_url", "html_url", "pdf_url"]
-    for field in required_fields:
-        if field not in normalized:
-            if field == "relevance_score":
-                normalized[field] = 0
-            else:
-                normalized[field] = ""
-            logger.warning(f"Missing required field '{field}' in article data")
-    
-    return normalized 
+            "summary": "Failed to analyze article",
+            "importance": "",
+            "recommended_action": ""
+        } 
