@@ -8,6 +8,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, List, Dict, Optional
 import json
+from datetime import datetime
+from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator, TypeAdapter
 from pydantic_ai import Agent, RunContext, ModelRetry
@@ -19,6 +21,7 @@ from .models import RankedArticle, ArticleAnalysis, UserContext, ScrapedArticle
 from .agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
 from .agent_tools import scrape_article, analyze_article
 from crawl4ai import AsyncWebCrawler # Import the crawler
+from .fetcher import fetch_arxiv_cs_submissions  # Import the new fetcher
 
 # Import settings from .config
 from .config import settings
@@ -364,67 +367,94 @@ def generate_html_email(
 # ============================
 
 async def main():
-    logger.info("Starting ArXiv Agent...")
-    # --- User Profile ---
-    user_info = UserContext(
-        name="Dr. Evelyn Reed",
-        title="Computational Linguist",
-        goals="Stay updated on Large Language Models, specifically Transformer architectures, model optimization techniques, and ethical considerations in AI."
-    )
-
-    # --- 1. Read ArXiv data --- 
+    """Main entry point for the ArXiv agent."""
     try:
-        with open(settings.arxiv_file, 'r') as f:
-            raw_articles = json.load(f)
-        logger.info(f"Loaded {len(raw_articles)} articles from {settings.arxiv_file}")
-    except FileNotFoundError:
-        logger.error(f"Error: Input file not found at {settings.arxiv_file}")
-        return
-    except json.JSONDecodeError:
-        logger.error(f"Error: Could not decode JSON from {settings.arxiv_file}")
-        return
-    except Exception as e:
-        logger.error(f"An unexpected error occurred reading the input file: {e}", exc_info=True)
-        return
+        # Create a single crawler instance for both fetching and scraping
+        async with AsyncWebCrawler(verbose=False) as crawler:
+            # Determine target date
+            fetch_date_str = settings.target_date
+            if not fetch_date_str:
+                fetch_date_str = datetime.now().strftime("%Y-%m-%d")
+                logger.info(f"No target date specified, using today: {fetch_date_str}")
+            else:
+                logger.info(f"Using target date from settings: {fetch_date_str}")
 
-    # Create crawler instance once
-    async with AsyncWebCrawler(verbose=False) as crawler:
-        try:
-            # --- 2. Rank Articles --- 
-            logger.info("Ranking articles...")
-            ranked_articles = await rank_articles(user_info, raw_articles)
-            logger.info(f"Ranking complete. Got {len(ranked_articles)} relevant articles.")
-            if not ranked_articles:
-                logger.info("No relevant articles found after ranking. Exiting.")
+            # Fetch articles using the shared crawler instance
+            logger.info(f"Fetching arXiv CS submissions for {fetch_date_str}...")
+            raw_articles = await fetch_arxiv_cs_submissions(target_date=fetch_date_str, crawler=crawler)
+            
+            if not raw_articles:
+                logger.error(f"Failed to fetch articles or no articles found for {fetch_date_str}. Exiting.")
                 return
 
-            # --- 3. Scrape Ranked Articles --- 
-            logger.info("Scraping content for ranked articles...")
-            # Pass the crawler instance to the new scraping function
-            scraped_article_data = await _scrape_ranked_articles(ranked_articles, crawler)
-            successful_scrapes = sum(1 for item in scraped_article_data if item.scraped_content is not None)
-            logger.info(f"Scraping complete. Successfully scraped content for {successful_scrapes} out of {len(ranked_articles)} articles.")
+            logger.info(f"Successfully fetched {len(raw_articles)} articles for {fetch_date_str}.")
 
-            # --- 4. Analyze Articles --- 
-            logger.info("Analyzing scraped articles...")
-            # Pass the scraped data to analyze_articles
-            analyses = await analyze_articles(user_info, scraped_article_data)
-            logger.info(f"Analysis complete. Generated {len(analyses)} analyses.")
+            # Save fetched data
+            output_dir = Path("data")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_filename = output_dir / f"arxiv_cs_submissions_{fetch_date_str}.json"
+            try:
+                with open(output_filename, "w", encoding='utf-8') as f:
+                    json.dump(raw_articles, f, ensure_ascii=False, indent=2)
+                logger.info(f"Saved fetched articles to {output_filename}")
+            except IOError as e:
+                logger.error(f"Failed to save fetched articles to {output_filename}: {e}")
+                # Continue execution even if saving fails
 
-            # --- 5. Generate HTML Email --- 
-            logger.info("Generating HTML digest...")
-            html_output = generate_html_email(user_info, ranked_articles, analyses)
+            # Create a sample user context (this should be replaced with actual user data in production)
+            user_info = UserContext(
+                name="AI Researcher",
+                title="PhD Student",
+                goals="Machine Learning, Natural Language Processing, and AI Safety"
+            )
 
-            # --- 6. Save Output --- 
-            output_filename = "arxiv_digest.html"
-            with open(output_filename, "w") as f:
-                f.write(html_output)
-            logger.info(f"HTML digest saved to {output_filename}")
+            # Rank the articles
+            ranked_articles = await rank_articles(user_info, raw_articles)
+            if not ranked_articles:
+                logger.error("No articles were ranked. Exiting.")
+                return
 
-        except ModelRetry as e:
-            logger.error(f"Agent failed after retries during ranking: {e}", exc_info=True)
-        except Exception as e:
-            logger.error(f"An error occurred during the main agent execution: {e}", exc_info=True)
+            # Save ranking results
+            ranking_output = Path(settings.ranking_output_file)
+            ranking_output.parent.mkdir(parents=True, exist_ok=True)
+            with open(ranking_output, "w", encoding='utf-8') as f:
+                # Convert HttpUrl objects to strings in the model dump
+                json.dump([{**article.model_dump(), 
+                           'abstract_url': str(article.abstract_url),
+                           'html_url': str(article.html_url) if article.html_url else None,
+                           'pdf_url': str(article.pdf_url) if article.pdf_url else None} 
+                          for article in ranked_articles], f, ensure_ascii=False, indent=2)
+            logger.info(f"Saved ranking results to {ranking_output}")
+
+            # Scrape and analyze the ranked articles using the same crawler instance
+            scraped_articles = await _scrape_ranked_articles(ranked_articles, crawler)
+            analyses = await analyze_articles(user_info, scraped_articles)
+
+            if analyses:
+                # Save analysis results
+                analysis_output = Path(settings.analysis_output_file)
+                analysis_output.parent.mkdir(parents=True, exist_ok=True)
+                with open(analysis_output, "w", encoding='utf-8') as f:
+                    # Convert HttpUrl objects to strings in the model dump
+                    json.dump([{**analysis.model_dump(),
+                              'abstract_url': str(analysis.abstract_url),
+                              'html_url': str(analysis.html_url) if analysis.html_url else None,
+                              'pdf_url': str(analysis.pdf_url) if analysis.pdf_url else None}
+                             for analysis in analyses], f, ensure_ascii=False, indent=2)
+                logger.info(f"Saved analysis results to {analysis_output}")
+
+                # Generate email content
+                email_html = generate_html_email(user_info, ranked_articles, analyses)
+                email_output = output_dir / f"email_{fetch_date_str}.html"
+                with open(email_output, "w", encoding='utf-8') as f:
+                    f.write(email_html)
+                logger.info(f"Generated email content saved to {email_output}")
+            else:
+                logger.error("No analyses were generated.")
+
+    except Exception as e:
+        logger.error(f"Error in main function: {e}", exc_info=True)
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main()) 
