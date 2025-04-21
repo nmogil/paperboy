@@ -2,6 +2,7 @@
 /examples
 .roo
 /venv
+.venv/
 .cursor
 
 # Added by Claude Task Master
@@ -17,6 +18,10 @@ dev-debug.log
 node_modules/
 
 # Environment variables
+.env
+config/.env
+config/.env.*
+!config/.env.example
 
 # Editor directories and files
 .idea

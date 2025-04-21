@@ -16,9 +16,9 @@ RUN apt-get update && \
     python3-dev && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy requirements files and install Python dependencies
+COPY requirements.txt requirements.lock.txt ./
+RUN pip install --no-cache-dir -r requirements.lock.txt
 
 # Final stage
 FROM python:3.10-slim
@@ -57,11 +57,34 @@ RUN apt-get update && \
 COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Install only Chromium browser (skip other browsers)
-RUN playwright install chromium --with-deps
+# Install Chromium browser as root (skip other browsers)
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright
+RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH && \
+    playwright install chromium --with-deps
+
+# Create config directory and ensure it exists
+RUN mkdir -p /app/config
+
+# Create a non-root user and group called 'app'
+RUN groupadd --system app && useradd --system --gid app app
+
+# Create and set permissions for home directory and cache
+RUN mkdir -p /home/app && \
+    chown -R app:app /home/app && \
+    chown -R app:app $PLAYWRIGHT_BROWSERS_PATH
+
+# Set appropriate permissions for application and config
+RUN chown -R app:app /app && \
+    chmod -R 755 /app/config
 
 # Copy the application code
 COPY . .
+
+# Set HOME environment variable
+ENV HOME=/home/app
+
+# Switch to the non-root user
+USER app
 
 # Expose the port the app runs on
 EXPOSE 8000
