@@ -5,3 +5,5 @@ crawl4ai
 python-dotenv
 beautifulsoup4
 # logfire          # Uncomment to enable structured logging
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0

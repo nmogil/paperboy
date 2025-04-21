@@ -49,11 +49,14 @@ class Deps:
 
 # --- Pydantic AI Agent Definition ---
 
+# Create the model instance first
+llm_model = OpenAIModel(
+    settings.openai_model, # Use settings
+    provider=OpenAIProvider(api_key=settings.openai_api_key) # Use settings
+)
+
 arxiv_agent = Agent(
-    model=OpenAIModel(
-        settings.openai_model, # Use settings
-        provider=OpenAIProvider(api_key=settings.openai_api_key) # Use settings
-    ),
+    llm_model, # Correct: Positional argument
     system_prompt=SYSTEM_PROMPT,
     deps_type=Deps,
     retries=settings.agent_retries, # Use settings
