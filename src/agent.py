@@ -10,7 +10,7 @@ from typing import Any, List, Dict
 import json
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator, TypeAdapter
 from pydantic_ai import Agent, RunContext, ModelRetry
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -201,49 +201,42 @@ async def rank_articles(
     )
 
     try:
-        resp = await arxiv_agent.run(user_prompt)
-        # With response_model=List[RankedArticle], output is auto-validated
-        if not hasattr(resp, 'output') or not isinstance(resp.output, str):
-            logger.error(f"Agent response did not contain the expected string output. Response: {resp}")
-            raise TypeError(f"Agent response output is not a string: {type(resp.output if hasattr(resp, 'output') else resp)}")
-        else:
-            json_string = resp.output
-            logger.debug(f"Received JSON string from agent: {json_string[:200]}...")
-            
-            # Manually parse the JSON string and validate with Pydantic model
+        res = await arxiv_agent.run(
+            user_prompt,
+            response_model=List[RankedArticle],
+        )
+        # Ideally, in the latest Pydantic AI, res.output is now a List[RankedArticle]
+        if isinstance(res.output, list) and all(isinstance(a, RankedArticle) for a in res.output):
+            ranked = res.output # Assign directly if it's the correct type
+        elif isinstance(res.output, str):
+            # Defensive fallback: try to parse by hand, log root cause
+            logger.warning("Agent output was a string, attempting JSON model validation as fallback.")
             try:
-                data = json.loads(json_string)
-                if not isinstance(data, list):
-                    raise TypeError(f"Parsed JSON is not a list: {type(data)}")
-                
-                validated_articles = []
-                for item in data:
-                    try:
-                        validated_article = RankedArticle.model_validate(item)
-                        validated_articles.append(validated_article)
-                    except ValidationError as val_err:
-                        logger.warning(f"Validation failed for article item: {item}. Error: {val_err}")
-                        # Decide whether to skip or handle partially valid data
-                        continue # Skip invalid items for now
-                
-                ranked: List[RankedArticle] = validated_articles
-                
-            except json.JSONDecodeError as json_err:
-                logger.error(f"Failed to decode JSON string from agent response: {json_err}")
-                logger.debug(f"Invalid JSON string: {json_string}")
+                # No need to import TypeAdapter here if already imported at top level
+                RankedArticleListAdapter = TypeAdapter(List[RankedArticle])
+                ranked = RankedArticleListAdapter.validate_json(res.output)
+            except ValidationError as val_err:
+                logger.error(f"Response model validation failed, see raw output: {res.output[:500]}...")
                 raise
-            except TypeError as type_err:
-                 logger.error(f"Error processing parsed JSON: {type_err}")
-                 raise
-            
-        logger.info(f"Returned {len(ranked)} ranked articles.")
+            except Exception as json_err: # Catch generic JSON parsing errors too
+                logger.error(f"Failed to parse fallback JSON string output: {json_err}")
+                logger.debug(f"Invalid JSON string received: {res.output[:500]}...")
+                raise
+        else:
+            # Very unexpected. Log and fail loudly.
+            logger.error(f"Unexpected type from agent: {type(res.output)}")
+            raise TypeError(f"Unexpected output type: {type(res.output)}")
+
+        # Log the number of articles returned after successful validation
+        logger.info(f"Agent returned {len(ranked)} ranked articles.")
         return ranked
     except ValidationError as e:
-        logger.error(f"LLM output failed schema validation:\n{e}")
-        # Optionally extract partial data here if needed
+        # Validation errors from .run() or fallback parsing are caught here
+        logger.error(f"LLM output failed schema validation: {e}", exc_info=True)
         raise
     except Exception as e:
-        logger.error(f"Error ranking articles: {e}")
+        # Catch any other unexpected errors during the process
+        logger.error(f"Error in rank_articles: {e}", exc_info=True)
         raise
 
 async def analyze_articles(
