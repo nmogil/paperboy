@@ -6,7 +6,7 @@ import os
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 import json
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator, TypeAdapter
@@ -15,7 +15,7 @@ from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 # Import models from the new central location
-from .models import RankedArticle, ArticleAnalysis, UserContext
+from .models import RankedArticle, ArticleAnalysis, UserContext, ScrapedArticle
 from .agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
 from .agent_tools import scrape_article, analyze_article
 from crawl4ai import AsyncWebCrawler # Import the crawler
@@ -58,6 +58,94 @@ arxiv_agent = Agent(
 )
 
 # Note: Tools are imported and registered in agent_tools.py using @arxiv_agent.tool
+
+# ============================
+#     HELPER FUNCTIONS
+# ============================
+
+def _merge_llm_and_original_articles(
+    llm_articles: List[RankedArticle],
+    original_articles_map: Dict[str, Dict[str, Any]]
+) -> List[RankedArticle]:
+    """Merges LLM output with original article data for completeness."""
+    filled_ranked_articles = []
+    processed_urls = set() # To handle potential duplicates from LLM
+
+    for llm_article in llm_articles:
+        # Use abstract_url (as string) to find the original data
+        original_data = original_articles_map.get(str(llm_article.abstract_url))
+
+        if str(llm_article.abstract_url) in processed_urls:
+            logger.warning(f"Skipping duplicate article from LLM output: {llm_article.title}")
+            continue
+        processed_urls.add(str(llm_article.abstract_url))
+
+        if original_data:
+            # Create a new dictionary merging original data with LLM output
+            # Prioritize LLM fields where they exist and are valid
+            # But fill from original_data if LLM omitted an optional field
+            merged_data = original_data.copy() # Start with original data
+            merged_data.update(llm_article.model_dump(exclude_unset=True)) # Overlay non-None fields from LLM output
+
+            try:
+                # Re-validate the merged data to ensure consistency
+                final_article = RankedArticle(**merged_data)
+                filled_ranked_articles.append(final_article)
+            except ValidationError as e:
+                logger.warning(f"Validation failed after merging LLM output with original data for '{llm_article.title}'. Error: {e}. Skipping article.")
+        else:
+            # If original data not found, keep LLM version if valid
+            logger.warning(f"Could not find original data for ranked article: '{llm_article.title}' ({llm_article.abstract_url}). Using LLM output directly.")
+            filled_ranked_articles.append(llm_article) # Keep the article from LLM
+
+    return filled_ranked_articles
+
+
+async def _scrape_ranked_articles(
+    ranked_articles: List[RankedArticle],
+    crawler: AsyncWebCrawler
+) -> List[ScrapedArticle]:
+    """Concurrently scrapes the HTML content for a list of ranked articles."""
+    tasks = []
+    for article in ranked_articles:
+        if article.html_url:
+            tasks.append(scrape_article(crawler, str(article.html_url)))
+        else:
+            # Append a placeholder for articles without HTML URL
+            # Create a future that immediately returns None
+            future = asyncio.get_event_loop().create_future()
+            future.set_result((None, "No HTML URL provided")) # Tuple (content, error)
+            tasks.append(future)
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    scraped_data = []
+    for i, result in enumerate(results):
+        article = ranked_articles[i]
+        content = None
+        error_msg = None
+        if isinstance(result, Exception):
+            error_msg = f"Scraping failed: {result}"
+            logger.warning(f"Error scraping {article.html_url} for '{article.title}': {result}")
+        elif isinstance(result, tuple): # Handle the (None, "No HTML URL") case
+             content, error_msg = result
+        else:
+            content = result # Successful scrape
+            if not content:
+                error_msg = "Scraping returned no content"
+                logger.warning(f"Scraping returned no content for {article.html_url} ('{article.title}')")
+
+
+        scraped_data.append(
+            ScrapedArticle(
+                article=article,
+                scraped_content=content,
+                scrape_error=error_msg
+            )
+        )
+
+    return scraped_data
+
 
 # ============================
 #     MAIN AGENT LOGIC
@@ -108,55 +196,31 @@ async def rank_articles(
         if isinstance(res.output, list) and all(isinstance(a, RankedArticle) for a in res.output):
             ranked_articles_from_llm = res.output
         else:
-            # Fallback parsing (as before)
+            # Fallback parsing
             logger.warning(f"Agent output was not List[RankedArticle] as expected (Type: {type(res.output)}). Attempting fallback parsing.")
             if isinstance(res.output, str):
                  try:
                      RankedArticleListAdapter = TypeAdapter(List[RankedArticle])
                      ranked_articles_from_llm = RankedArticleListAdapter.validate_json(res.output)
                  except ValidationError as val_err:
-                     logger.error(f"Fallback JSON validation failed: {val_err}", exc_info=True) # Added exc_info
+                     logger.error(f"Fallback JSON validation failed: {val_err}", exc_info=True)
                      raise
                  except Exception as json_err:
-                     logger.error(f"Failed to parse fallback JSON string: {json_err}", exc_info=True) # Added exc_info
+                     logger.error(f"Failed to parse fallback JSON string: {json_err}", exc_info=True)
                      raise
             else:
                  logger.error(f"Unexpected output type from agent: {type(res.output)}")
                  raise TypeError(f"Cannot process agent output type: {type(res.output)}")
 
-        # --- 4. Post-processing: Fill Missing Fields --- 
+        # --- 4. Post-processing: Use Helper Function --- 
         # Create a lookup map from the original articles using abstract_url as key
         original_articles_map = {str(orig.get('abstract_url')): orig for orig in articles if orig.get('abstract_url')}
-        
-        filled_ranked_articles = []
-        processed_urls = set() # To handle potential duplicates from LLM
 
-        for llm_article in ranked_articles_from_llm:
-            # Use abstract_url (as string) to find the original data
-            original_data = original_articles_map.get(str(llm_article.abstract_url))
-            
-            if str(llm_article.abstract_url) in processed_urls:
-                 logger.warning(f"Skipping duplicate article from LLM output: {llm_article.title}")
-                 continue
-            processed_urls.add(str(llm_article.abstract_url))
-
-            if original_data:
-                # Create a new dictionary merging original data with LLM output
-                # Prioritize LLM fields where they exist and are valid (handled by initial Pydantic validation)
-                # But fill from original_data if LLM omitted an optional field
-                merged_data = original_data.copy() # Start with original data
-                merged_data.update(llm_article.model_dump(exclude_unset=True)) # Overlay non-None fields from LLM output
-                
-                try:
-                    # Re-validate the merged data to ensure consistency
-                    final_article = RankedArticle(**merged_data)
-                    filled_ranked_articles.append(final_article)
-                except ValidationError as e:
-                    logger.warning(f"Validation failed after merging LLM output with original data for '{llm_article.title}'. Error: {e}. Skipping article.")
-            else:
-                # If original data not found (e.g., LLM hallucinated an article?), keep LLM version if valid
-                logger.warning(f"Could not find original data for ranked article: '{llm_article.title}' ({llm_article.abstract_url}). Using LLM output directly.")
-                filled_ranked_articles.append(llm_article) # Keep the article from LLM
+        # Call the extracted helper function
+        filled_ranked_articles = _merge_llm_and_original_articles(
+            ranked_articles_from_llm,
+            original_articles_map
+        )
 
         logger.info(f"Agent initially returned {len(ranked_articles_from_llm)} articles. After post-processing: {len(filled_ranked_articles)} articles.")
         return filled_ranked_articles # Return the list with filled/verified data
@@ -170,54 +234,54 @@ async def rank_articles(
         raise
 
 async def analyze_articles(
-    user_info: UserContext, # Changed from dict to UserContext
-    articles: List[RankedArticle],
+    user_info: UserContext,
+    scraped_articles: List[ScrapedArticle], # Changed input type
     top_n: int = settings.top_n_articles
-) -> List[ArticleAnalysis]:
+) -> List[ArticleAnalysis]: # Return type remains the same
     """
-    Get LLM-generated analyses for the most relevant articles.
+    Get LLM-generated analyses for the most relevant articles using pre-scraped content.
 
     Args:
         user_info: UserContext object.
-        articles: List of RankedArticle objects.
+        scraped_articles: List of ScrapedArticle objects containing metadata and content/error.
         top_n: Number of articles to analyze (defaults to value in settings)
 
     Returns:
         List of ArticleAnalysis objects.
     """
-    # user = UserContext(**user_info) # No longer needed
     analyses = []
-    
-    async with AsyncWebCrawler(verbose=False) as crawler:
-        logger.info(f"Analyzing top {min(top_n, len(articles))} articles...")
-        for art in articles[:top_n]:
-            try:
-                article_metadata = art.model_dump() # Still need dict for analyze_article tool input
-                # Ensure html_url is a string for scrape_article
-                html_url_str = str(art.html_url) if art.html_url else None
-                
-                if not html_url_str:
-                    logger.warning(f"Skipping analysis for '{art.title}' (no HTML URL)")
-                    continue
-                    
-                article_content = await scrape_article(crawler, html_url_str)
-                
-                if not article_content:
-                    logger.warning(f"Skipping analysis for '{art.title}' (scraping failed or no content)")
-                    continue
-                
-                # Call analyze_article (which now returns ArticleAnalysis)
-                analysis_result = await analyze_article(
-                    arxiv_agent, 
-                    article_content=article_content,
-                    user_context=user_info, # Pass the UserContext object directly
-                    article_metadata=article_metadata # Pass the dict derived from RankedArticle
-                )
-                analyses.append(analysis_result)
-            except Exception as e:
-                logger.error(f"Failed to analyze article '{art.title}': {e}", exc_info=True)
-                continue 
-                
+
+    # Crawler is no longer needed here
+    logger.info(f"Analyzing top {min(top_n, len(scraped_articles))} articles...")
+    articles_to_analyze = scraped_articles[:top_n]
+
+    for item in articles_to_analyze:
+        art = item.article # Get the RankedArticle part
+        article_content = item.scraped_content
+        scrape_error = item.scrape_error
+
+        if scrape_error:
+            logger.warning(f"Skipping analysis for '{art.title}' due to scraping error: {scrape_error}")
+            continue
+        if not article_content:
+            # This case might be redundant if scrape_error covers it, but good for safety
+            logger.warning(f"Skipping analysis for '{art.title}' (no content available after scraping attempt)")
+            continue
+
+        try:
+            # Call analyze_article tool
+            analysis_result = await analyze_article(
+                arxiv_agent,
+                article_content=article_content,
+                user_context=user_info,
+                article_metadata=art.model_dump() # Pass metadata dict
+            )
+            analyses.append(analysis_result)
+        except Exception as e:
+            logger.error(f"Failed to analyze article '{art.title}': {e}", exc_info=True)
+            # Decide if you want to stop analysis or just skip this article
+            continue
+
     logger.info(f"Completed analysis for {len(analyses)} articles.")
     return analyses
 
@@ -296,74 +360,71 @@ def generate_html_email(
     return html_content
 
 # ============================
-#        TESTING AREA
+#        MAIN EXECUTION
 # ============================
+
 async def main():
-    """Main execution flow."""
+    logger.info("Starting ArXiv Agent...")
     # --- User Profile ---
     user_info = UserContext(
         name="Dr. Evelyn Reed",
-        title="Quantum Computing Researcher",
-        goals="Stay updated on breakthroughs in quantum algorithms, error correction, and hardware developments. Particularly interested in applications for drug discovery and materials science."
+        title="Computational Linguist",
+        goals="Stay updated on Large Language Models, specifically Transformer architectures, model optimization techniques, and ethical considerations in AI."
     )
 
-    # --- Load Articles ---
-    # Use settings for the default file path
-    # default_arxiv_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'arxiv_papers.json')
-    # arxiv_file_path = os.getenv("ARXIV_FILE", default_arxiv_file)
-    arxiv_file_path = settings.arxiv_file # Use settings
-    
-    if not os.path.isabs(arxiv_file_path):
-        arxiv_file_path = os.path.join(os.path.dirname(__file__), '..', 'data', arxiv_file_path) # Assume relative to data dir if not absolute
-
+    # --- 1. Read ArXiv data --- 
     try:
-        with open(arxiv_file_path, 'r') as f:
+        with open(settings.arxiv_file, 'r') as f:
             raw_articles = json.load(f)
+        logger.info(f"Loaded {len(raw_articles)} articles from {settings.arxiv_file}")
     except FileNotFoundError:
-        logger.error(f"Input article file not found: {arxiv_file_path}")
+        logger.error(f"Error: Input file not found at {settings.arxiv_file}")
         return
     except json.JSONDecodeError:
-        logger.error(f"Error decoding JSON from file: {arxiv_file_path}")
+        logger.error(f"Error: Could not decode JSON from {settings.arxiv_file}")
         return
-
-    # --- Run Agent Steps ---
-    # top_n = int(os.getenv("TOP_N_ARTICLES", "5")) # Get top_n from settings via function default
-    
-    # Make sure the tools are registered by importing them
-    from . import agent_tools 
-    
-    # Pass necessary dependencies to the agent tools if required via context
-    # For now, assuming the agent manages deps internally or tools don't need external deps passed this way
-    deps_instance = Deps(agent=arxiv_agent)
-
-    logger.info("Starting article ranking...")
-    try:
-        ranked_articles = await rank_articles(user_info, raw_articles) # top_n comes from default
     except Exception as e:
-        logger.error(f"Article ranking failed: {e}", exc_info=True)
+        logger.error(f"An unexpected error occurred reading the input file: {e}", exc_info=True)
         return
 
-    if not ranked_articles:
-        logger.warning("No articles were ranked successfully.")
-        return
+    # Create crawler instance once
+    async with AsyncWebCrawler(verbose=False) as crawler:
+        try:
+            # --- 2. Rank Articles --- 
+            logger.info("Ranking articles...")
+            ranked_articles = await rank_articles(user_info, raw_articles)
+            logger.info(f"Ranking complete. Got {len(ranked_articles)} relevant articles.")
+            if not ranked_articles:
+                logger.info("No relevant articles found after ranking. Exiting.")
+                return
 
-    logger.info("Starting article analysis...")
-    try:
-        analyses = await analyze_articles(user_info, ranked_articles) # top_n comes from default
-    except Exception as e:
-        logger.error(f"Article analysis failed: {e}", exc_info=True)
-        # Continue to generate email with ranked articles even if analysis fails
-        analyses = [] 
+            # --- 3. Scrape Ranked Articles --- 
+            logger.info("Scraping content for ranked articles...")
+            # Pass the crawler instance to the new scraping function
+            scraped_article_data = await _scrape_ranked_articles(ranked_articles, crawler)
+            successful_scrapes = sum(1 for item in scraped_article_data if item.scraped_content is not None)
+            logger.info(f"Scraping complete. Successfully scraped content for {successful_scrapes} out of {len(ranked_articles)} articles.")
 
-    # --- Generate Output ---
-    logger.info("Generating HTML email...")
-    html_output = generate_html_email(user_info, ranked_articles, analyses)
+            # --- 4. Analyze Articles --- 
+            logger.info("Analyzing scraped articles...")
+            # Pass the scraped data to analyze_articles
+            analyses = await analyze_articles(user_info, scraped_article_data)
+            logger.info(f"Analysis complete. Generated {len(analyses)} analyses.")
 
-    # Save or print the HTML output
-    output_filename = "arxiv_digest.html"
-    with open(output_filename, "w") as f:
-        f.write(html_output)
-    logger.info(f"HTML email saved to {output_filename}")
+            # --- 5. Generate HTML Email --- 
+            logger.info("Generating HTML digest...")
+            html_output = generate_html_email(user_info, ranked_articles, analyses)
+
+            # --- 6. Save Output --- 
+            output_filename = "arxiv_digest.html"
+            with open(output_filename, "w") as f:
+                f.write(html_output)
+            logger.info(f"HTML digest saved to {output_filename}")
+
+        except ModelRetry as e:
+            logger.error(f"Agent failed after retries during ranking: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"An error occurred during the main agent execution: {e}", exc_info=True)
 
 if __name__ == "__main__":
     asyncio.run(main()) 

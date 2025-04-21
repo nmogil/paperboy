@@ -105,3 +105,9 @@ class AgentStateModel(BaseModel):
 
     # Consider adding methods for saving/loading if state logic resides here
     # Or keep that logic separate in AgentState class in state.py 
+
+# New model for carrying scraped content alongside ranked data
+class ScrapedArticle(BaseModel):
+    article: RankedArticle = Field(..., description="The ranked article metadata.")
+    scraped_content: Optional[str] = Field(None, description="The scraped HTML or text content of the article.")
+    scrape_error: Optional[str] = Field(None, description="Error message if scraping failed.") 
