@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from bs4 import BeautifulSoup
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode
 from crawl4ai.extraction_strategy import JsonCssExtractionStrategy
+from src.models import UserContext, ArticleAnalysis
 from src.agent_prompts import ARTICLE_ANALYSIS_PROMPT
 import random
 import re
@@ -228,39 +229,35 @@ async def scrape_articles_batch(urls: List[str], max_concurrent: int = 3) -> Dic
 async def analyze_article(
     agent: Agent,
     article_content: str,
-    user_context: Any,
+    user_context: UserContext,
     article_metadata: Dict[str, Any]
-) -> Dict[str, str]:
+) -> ArticleAnalysis:
     """
     Analyze an article using the LLM agent.
     Formats the prompt using ARTICLE_ANALYSIS_PROMPT and runs the agent.
-    Returns the structured analysis result.
+    Returns the structured analysis result as an ArticleAnalysis object.
 
     Args:
         agent: The arxiv_agent instance (or any compatible agent).
         article_content: Main body text.
-        user_context: UserContext object.
-        article_metadata: Metadata from RankedArticle.
+        user_context: UserContext object (imported type).
+        article_metadata: Metadata from RankedArticle (passed as dict).
 
     Returns:
-        Dict with keys: summary, importance, recommended_action
+        ArticleAnalysis object containing analysis and metadata.
     """
     prompt = ARTICLE_ANALYSIS_PROMPT.format(
         goals=user_context.goals,
         title=user_context.title,
         name=user_context.name,
-        article_title=article_metadata["title"],
-        authors=", ".join(article_metadata["authors"]),
-        subject=article_metadata["subject"],
+        article_title=article_metadata.get("title", "N/A"),
+        authors=", ".join(article_metadata.get("authors", [])),
+        subject=article_metadata.get("subject", "N/A"),
         content=article_content
     )
-    # For direct use: this method expects an agent to be called elsewhere.
-    # In usage with the Agent, the agent.run() will be called with this prompt.
     
     # Run the agent with the formatted prompt
     try:
-        # The agent.run result might be an AgentRunResult object or just the string
-        # We expect a string based on previous tests, but handle both
         response = await agent.run(prompt)
         
         response_text = ""
@@ -270,30 +267,40 @@ async def analyze_article(
              response_text = response
         else:
              logger.warning(f"Unexpected response type from agent.run for analysis: {type(response)}")
-             # Attempt to stringify
              try:
                  response_text = str(response.output if hasattr(response, 'output') else response)
              except Exception:
                  response_text = ""
         
         if not response_text:
-             raise ValueError("Agent returned empty or non-string response for analysis")
+             # If agent fails, return metadata with placeholder analysis
+             logger.error("Agent returned empty or non-string response for analysis")
+             return ArticleAnalysis(
+                 **article_metadata,
+                 summary="Analysis failed: Agent returned empty response.",
+                 importance="Unknown",
+                 recommended_action="Manual review needed"
+             )
              
         # Parse the structured response (Summary\n\nImportance\n\nAction)
         parts = response_text.strip().split('\n\n', 2)
-        summary = parts[0].replace("Summary", "").strip() if len(parts) > 0 else ""
-        importance = parts[1].replace("Importance", "").strip() if len(parts) > 1 else ""
-        action = parts[2].replace("Recommended Action", "").strip() if len(parts) > 2 else ""
+        summary = parts[0].replace("Summary", "").strip() if len(parts) > 0 else "Analysis incomplete"
+        importance = parts[1].replace("Importance", "").strip() if len(parts) > 1 else "Unknown"
+        action = parts[2].replace("Recommended Action", "").strip() if len(parts) > 2 else "Review needed"
         
-        return {
-            "summary": summary,
-            "importance": importance,
-            "recommended_action": action
-        }
+        # Return the validated ArticleAnalysis object
+        return ArticleAnalysis(
+            **article_metadata,
+            summary=summary,
+            importance=importance,
+            recommended_action=action
+        )
     except Exception as e:
         logger.error(f"Error running LLM for analysis via agent: {e}", exc_info=True)
-        return {
-            "summary": "Failed to analyze article",
-            "importance": "",
-            "recommended_action": ""
-        } 
+        # Return metadata with error analysis if exception occurs
+        return ArticleAnalysis(
+            **article_metadata,
+            summary=f"Analysis failed: {str(e)}",
+            importance="Unknown",
+            recommended_action="Error during analysis"
+        ) 

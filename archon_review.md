@@ -163,18 +163,18 @@ Here is a **focused expert review** of your `src/agent.py`, `src/agent_tools.py`
 
 # 8. Concrete Action Points Table
 
-| Issue                                   | Suggestion                                                                            |
-| --------------------------------------- | ------------------------------------------------------------------------------------- |
-| Manual LLM output parsing/norm          | Use Agent.run with response_model=List[RankedArticle] so output is model-validated    |
-| Normalization logic spread across code  | Move all normalization to @model_validator(mode="before") on the Pydantic model       |
-| Validation errors silently skipped      | Surface validation errors and aggregate summary, don't just log+skip                  |
-| Inconsistent field names (subject etc.) | Handle these in the @model_validator, not scattered in code                           |
-| Duplicated normalization logic          | Remove duplicate functions, use model-only normalization                              |
-| Scraping/Analysis error not surfaced    | Add 'error' (str) field when scraping or analysis fails, not just skipping            |
-| Batch scraping instantiates per routine | Pass/reuse shared crawler (async context manager, same as LLM agent)                  |
-| Type hints with Dict/Any                | Always use concrete Pydantic model types at function signatures                       |
-| Too manual prompt-correction on error   | On format/validation errors, retry with LLM model, using ModelRetry or re-instruction |
-| Models local to files                   | Put all models (RankedArticle, ArticleAnalysis, ...) in one `models.py` module        |
+| Issue                                      | Suggestion                                                                             |
+| ------------------------------------------ | -------------------------------------------------------------------------------------- |
+| ~~Manual LLM output parsing/norm~~         | ~~Use Agent.run with response_model=List[RankedArticle] so output is model-validated~~ |
+| ~~Normalization logic spread across code~~ | ~~Move all normalization to @model_validator(mode="before") on the Pydantic model~~    |
+| Validation errors silently skipped         | Surface validation errors and aggregate summary, don't just log+skip                   |
+| Inconsistent field names (subject etc.)    | Handle these in the @model_validator, not scattered in code                            |
+| ~~Duplicated normalization logic~~         | ~~Remove duplicate functions, use model-only normalization~~                           |
+| Scraping/Analysis error not surfaced       | Add 'error' (str) field when scraping or analysis fails, not just skipping             |
+| Batch scraping instantiates per routine    | Pass/reuse shared crawler (async context manager, same as LLM agent)                   |
+| Type hints with Dict/Any                   | Always use concrete Pydantic model types at function signatures                        |
+| Too manual prompt-correction on error      | On format/validation errors, retry with LLM model, using ModelRetry or re-instruction  |
+| ~~Models local to files~~                  | ~~Put all models (RankedArticle, ArticleAnalysis, ...) in one `models.py` module~~     |
 
 ---
 
@@ -223,14 +223,38 @@ No further normalization logic required _anywhere_ else.
 
 ## **Priority Actions:**
 
-1. **Move ALL normalization to model validators.**
-2. **Use `response_model` in Agent.run for direct model-validated output—no regex/manual parsing.**
-3. **Aggregate and report validation/analysis/scraping errors, not just skip them.**
-4. **Eliminate duplicate code and weakly-typed returns; use strong Pydantic typing everywhere.**
-5. **Consider modularizing shared models into their own file.**
+1. ~~Move ALL normalization to model validators.~~ (**DONE** - Validators added in `src/models.py`)
+2. ~~Use `response_model` in Agent.run for direct model-validated output—no regex/manual parsing.~~ (**DONE** - Implemented in `src/agent.py`)
+3. **Aggregate and report validation/analysis/scraping errors, not just skip them.** (**Partially Done** - Errors logged, but no aggregation yet)
+4. **Eliminate duplicate code and weakly-typed returns; use strong Pydantic typing everywhere.** (**DONE** - Refactored `agent.py`, `agent_tools.py`, `state.py` to use models from `src/models.py`)
+5. ~~Consider modularizing shared models into their own file.~~ (**DONE** - Created `src/models.py`)
 
 Applying these will make your Pydantic AI agent more robust, maintainable, and production-grade per Pydantic AI best practices.
 
 ---
 
 Would you like example code for migrating normalization to model validators, or a refactored version of your agent using these patterns? Or would you like the agent to be autonomously refined ("refine")?
+
+---
+
+## Implementation Summary (April 21, 2025)
+
+Based on the Archon review (Thread ID: 899eb172...), the following changes were implemented:
+
+1.  **Centralized Pydantic Models:** Created `src/models.py` and moved `RankedArticle`, `ArticleAnalysis`, and `UserContext` definitions there. Added `AgentStateModel` to this file.
+2.  **Strong Typing:**
+    - Refactored `src/agent.py` to import models from `src/models.py`, removed local definitions, and updated function signatures/internal logic to use these models (`UserContext`, `List[RankedArticle]`, `List[ArticleAnalysis]`).
+    - Refactored `src/agent_tools.py` to update `analyze_article` signature and return type to use `UserContext` and `ArticleAnalysis`.
+    - Refactored `src/state.py` to remove the local `AgentStateModel`, import the central one, and update methods to use the specific types (`Dict[str, RankedArticle]`, `Dict[str, UserContext]`). Implemented `model_dump_json` / `model_validate_json` for saving/loading.
+3.  **Pydantic AI `response_model`:** Confirmed `arxiv_agent` in `src/agent.py` uses `response_model=List[RankedArticle]`.
+4.  **Model Validators:** Added `@field_validator` and `@property` logic within `src/models.py` for basic normalization (authors, title, URLs, arxiv_id extraction).
+5.  **Robust Ranking Output:** Addressed the issue where the LLM omitted optional fields (like `html_url`) during ranking:
+    - Enhanced the prompt in `rank_articles` (`src/agent.py`) to explicitly instruct the LLM to copy all available fields.
+    - Implemented a post-processing step in `rank_articles` to merge the LLM's ranked output with the original input data, ensuring missing fields present in the source are filled in.
+6.  **Testing:** Ran `python -m src.agent` multiple times to test changes, including fixing relative import issues and verifying the file loading and post-processing logic worked as expected.
+
+**Remaining Potential Improvements (from original review):**
+
+- **Error Aggregation:** While errors are logged, there's no central aggregation or reporting of validation/scraping/analysis failures.
+- **Model Normalization:** More complex normalization logic (e.g., handling synonyms like subject/subjects) mentioned by Archon is not yet implemented in `@model_validator` in `src/models.py`.
+- **Error Propagation:** Specific error fields were not added to models to surface scraping/analysis failures directly in the output data.
