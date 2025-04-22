@@ -41,3 +41,6 @@ tasks/
 
 .windsurfrules
 # .project_resources
+
+notebooks/
+tests
