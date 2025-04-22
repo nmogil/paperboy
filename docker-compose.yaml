@@ -11,6 +11,10 @@ services:
       - "127.0.0.1:8000:8000"  # Only bind to localhost
     env_file:
       - ./config/.env
+    environment:
+      - LOG_LEVEL=WARNING  # Set to WARNING in production
+      - UVICORN_ACCESS_LOG=0  # Disable access logging in production
+      - UVICORN_LOG_LEVEL=warning
     volumes:
       - ./config/.env:/app/config/.env:ro  # Mount .env file as read-only
     security_opt:
@@ -26,15 +30,18 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/diagnostics/logfire-health"]
-      interval: 30s
+      interval: 21600s  # Changed from 60s to 6h (6 * 60 * 60 = 21600 seconds)
       timeout: 10s
       retries: 3
       start_period: 10s
     logging:
       driver: "json-file"
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "100m"  # Increased for production
+        max-file: "5"  # Keep more log files
+        compress: "true"  # Enable compression
+        mode: "non-blocking"  # Non-blocking logging
+        max-buffer-size: "4m"  # Buffer size for non-blocking mode
     deploy:
       resources:
         limits:
