@@ -1,14 +1,37 @@
 import uuid
 from typing import Dict, Any, Union, Optional
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Depends
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Depends, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 import asyncio
 import logging
 import httpx
+import os
+import logfire
 from pydantic import HttpUrl
+
+# Configure logging first
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Configure Logfire with proper error handling
+LOGFIRE_TOKEN = os.getenv('LOGFIRE_TOKEN')
+if not LOGFIRE_TOKEN:
+    logger.error("LOGFIRE_TOKEN is missing! Logs will NOT be sent to Logfire.")
+else:
+    try:
+        logfire.configure(
+            send_to_logfire="always"  # Always send logs, don't buffer
+        )
+        # Skip HTTPX instrumentation for now as it requires additional dependencies
+        # logfire.instrument_httpx(capture_all=True)
+        Agent.instrument_all()
+        logger.info("Logfire initialized successfully [Docker].")
+    except Exception as e:
+        logger.exception(f"Failed to initialize logfire: {e}")
 
 from .api_models import GenerateDigestRequest, GenerateDigestResponse, DigestStatusResponse
 from .agent import rank_articles, generate_html_email
@@ -38,7 +61,53 @@ app.add_middleware(
 # In-memory task storage
 tasks: Dict[str, Dict[str, Any]] = {}
 
-logger = logging.getLogger(__name__)
+# ---- Diagnostic Router ----
+diagnostics = APIRouter()
+
+@diagnostics.get("/logfire-health", response_class=JSONResponse)
+async def logfire_health_check():
+    """
+    Emit a test logfire event and check LOGFIRE_TOKEN surface.
+    Returns success if logfire seems healthy, warns otherwise.
+    """
+    errors = []
+
+    # Check token presence
+    logfire_token = os.getenv('LOGFIRE_TOKEN')
+    if not logfire_token:
+        errors.append("LOGFIRE_TOKEN not detected in environment!")
+    else:
+        # Send test log using logfire directly
+        logfire.info("Testing logfire log from /logfire-health endpoint.")
+
+    # Emit a custom span for diagnostics
+    with logfire.span("diagnostics.logfire_health") as span:
+        span.set_attribute("env.LOGFIRE_TOKEN_length", len(logfire_token or ""))
+        span.set_attribute("logfire_initiated", bool(logfire_token))
+
+    # Check .env file configuration
+    env_file = os.path.join(os.path.dirname(__file__), "..", "config", ".env")
+    env_file_exists = os.path.exists(env_file)
+    if env_file_exists:
+        try:
+            with open(env_file, "r") as f:
+                env_contents = f.read()
+                if "LOGFIRE_TOKEN" not in env_contents:
+                    errors.append("LOGFIRE_TOKEN not found in .env file")
+        except Exception as e:
+            errors.append(f"Error reading .env file: {str(e)}")
+    else:
+        errors.append(".env file not found")
+
+    return {
+        "logfire_token_present": bool(logfire_token),
+        "token_length": len(logfire_token or "") if logfire_token else 0,
+        "env_file_exists": env_file_exists,
+        "errors": errors,
+        "msg": "Logfire health endpoint tested; check Logfire Dashboard live view for events.",
+    }
+
+app.include_router(diagnostics, prefix="/diagnostics")
 
 async def send_callback(task_id: str, status: str, callback_url: Optional[HttpUrl], result: Optional[str] = None):
     """Sends a POST request to the callback URL with the task status and optional result."""
