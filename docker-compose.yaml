@@ -2,21 +2,44 @@ version: '3.8'
 
 services:
   api:
-    build: 
+    image: paperboy:optimized-v2
+    build:
       context: .
       dockerfile: Dockerfile
+    container_name: paperboy-api
     ports:
-      - "8000:8000"
-    volumes:
-      - .:/app
+      - "127.0.0.1:8000:8000"  # Only bind to localhost
     env_file:
       - ./config/.env
-    environment:
-      - ENVIRONMENT=development
-    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload  # Added --reload for development
+    volumes:
+      - ./config/.env:/app/config/.env:ro  # Mount .env file as read-only
+    security_opt:
+      - no-new-privileges:true  # Prevent privilege escalation
+    cap_drop:
+      - ALL  # Drop all capabilities
+    cap_add:
+      - NET_BIND_SERVICE  # Only add capability needed for port binding
+    read_only: true  # Make container filesystem read-only
+    tmpfs:
+      - /tmp  # Temporary storage for runtime
+      - /run
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/digest-status/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/diagnostics/logfire-health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s 
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.25'
+          memory: 512M 

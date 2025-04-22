@@ -9,25 +9,55 @@ __pycache__/
 *.so
 .Python
 venv/
+.venv/
+env/
+ENV/
 .env
+.env.*
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+coverage.xml
+*.cover
+*.log
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+.cursor/
+*.sublime-*
 
 # Project specific
 notebooks/
 tests/
 output/
 data/
-.cursor/
+tmp/
+temp/
+logs/
+*.log
+*.sqlite
+*.db
 
 # Docker
 Dockerfile
 .dockerignore
+docker-compose*.yml
 
 # Documentation
 *.md
-!README.md 
+!README.md
+
+# Build and dist
+dist/
+build/
+*.egg-info/
+
+# System
+.DS_Store
+Thumbs.db 

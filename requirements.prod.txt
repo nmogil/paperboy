@@ -1,0 +1,13 @@
+pydantic
+openai
+crawl4ai
+python-dotenv
+beautifulsoup4
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0
+httpx>=0.25.0
+pydantic-ai[logfire]
+pydantic-settings
+pyarrow
+pandas~=2.0.0  # Pinning pandas version to reduce size
+logfire[httpx] 
