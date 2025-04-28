@@ -45,7 +45,7 @@ from .security import validate_api_key
 # Initialize FastAPI app
 app = FastAPI(
     title="Paperboy Digest Agent API",
-    description="API for generating personalized ArXiv paper digests",
+    description="API for generating personalized `ArXiv` paper digests",
     version="1.0.0"
 )
 
