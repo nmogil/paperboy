@@ -15,8 +15,7 @@ import logging
 import httpx
 import logfire
 from pydantic import HttpUrl
-from crawl4ai import AsyncWebCrawler
-from crawl4ai.config import BrowserConfig
+from crawl4ai import AsyncWebCrawler, BrowserConfig
 
 # Configure logging first
 logging.basicConfig(level=logging.INFO)
@@ -181,10 +180,10 @@ async def process_digest_request(
             '--disable-dbus',
             '--no-zygote'
         ]
-        browser_config = BrowserConfig(launch_options={"args": playwright_launch_args})
+        browser_config = BrowserConfig(extra_args=playwright_launch_args)
 
         # Use async context manager for the crawler
-        async with AsyncWebCrawler(browser_config=browser_config) as crawler:
+        async with AsyncWebCrawler(config=browser_config) as crawler:
             agent = create_agent()
             
             # Fetch articles using the managed crawler

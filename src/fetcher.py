@@ -11,8 +11,8 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, JsonCssExtractionStrategy
-from crawl4ai.config import BrowserConfig
+# from crawl4ai.config import BrowserConfig # Comment out or remove old import
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, JsonCssExtractionStrategy, BrowserConfig # Try importing BrowserConfig from top-level crawl4ai
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +261,7 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
             '--disable-dbus',
             '--no-zygote'
         ]
-        browser_config = BrowserConfig(launch_options={"args": playwright_launch_args})
+        browser_config = BrowserConfig(extra_args=playwright_launch_args)
         
         # Create extraction strategies
         strategy_dd = JsonCssExtractionStrategy(schema_dd, verbose=False)
@@ -280,7 +280,7 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
         # Execute crawls
         if crawler is None:
             # Create a new crawler if none provided
-            async with AsyncWebCrawler(verbose=False, browser_config=browser_config) as new_crawler:
+            async with AsyncWebCrawler(verbose=False, config=browser_config) as new_crawler:
                 return await _execute_crawls(new_crawler, target_url, config_dd, config_dt)
         else:
             # Use the provided crawler

@@ -20,8 +20,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from .models import RankedArticle, ArticleAnalysis, UserContext, ScrapedArticle
 from .agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
 from .agent_tools import scrape_article, analyze_article
-from crawl4ai import AsyncWebCrawler # Import the crawler
-from crawl4ai.config import BrowserConfig # Add this import
+from crawl4ai import AsyncWebCrawler, BrowserConfig # Correct import
 from .fetcher import fetch_arxiv_cs_submissions  # Import the new fetcher
 
 # Import settings from .config
@@ -391,7 +390,7 @@ async def main():
             '--disable-dbus',
             '--no-zygote'
         ]
-        browser_config = BrowserConfig(launch_options={"args": playwright_launch_args})
+        browser_config = BrowserConfig(extra_args=playwright_launch_args)
 
         # Create a single crawler instance for both fetching and scraping
         async with AsyncWebCrawler(verbose=False, browser_config=browser_config) as crawler:
