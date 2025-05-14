@@ -1,4 +1,8 @@
 import uuid
+import os # Add this import
+# Set Playwright debug environment variable
+os.environ["DEBUG"] = "pw:api,pw:browser"
+
 from typing import Dict, Any, Union, Optional
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Depends, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +13,6 @@ from pydantic_ai.providers.openai import OpenAIProvider
 import asyncio
 import logging
 import httpx
-import os
 import logfire
 from pydantic import HttpUrl
 
