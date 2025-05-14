@@ -21,6 +21,7 @@ from .models import RankedArticle, ArticleAnalysis, UserContext, ScrapedArticle
 from .agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
 from .agent_tools import scrape_article, analyze_article
 from crawl4ai import AsyncWebCrawler # Import the crawler
+from crawl4ai.config import BrowserConfig # Add this import
 from .fetcher import fetch_arxiv_cs_submissions  # Import the new fetcher
 
 # Import settings from .config
@@ -372,8 +373,28 @@ def generate_html_email(
 async def main():
     """Main entry point for the ArXiv agent."""
     try:
+        playwright_launch_args = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-sync',
+            '--disable-translate',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--no-first-run',
+            '--safebrowsing-disable-auto-update',
+            '--disable-dbus',
+            '--no-zygote'
+        ]
+        browser_config = BrowserConfig(launch_options={"args": playwright_launch_args})
+
         # Create a single crawler instance for both fetching and scraping
-        async with AsyncWebCrawler(verbose=False) as crawler:
+        async with AsyncWebCrawler(verbose=False, browser_config=browser_config) as crawler:
             # Determine target date
             fetch_date_str = settings.target_date
             if not fetch_date_str:

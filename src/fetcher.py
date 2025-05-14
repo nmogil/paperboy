@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig, CacheMode, JsonCssExtractionStrategy
+from crawl4ai.config import BrowserConfig
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +243,26 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
         target_url = f"https://arxiv.org/catchup/cs/{target_date}"
         logger.info(f"Fetching arXiv CS submissions from {target_url}")
         
+        playwright_launch_args = [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-sync',
+            '--disable-translate',
+            '--metrics-recording-only',
+            '--mute-audio',
+            '--no-first-run',
+            '--safebrowsing-disable-auto-update',
+            '--disable-dbus',
+            '--no-zygote'
+        ]
+        browser_config = BrowserConfig(launch_options={"args": playwright_launch_args})
+        
         # Create extraction strategies
         strategy_dd = JsonCssExtractionStrategy(schema_dd, verbose=False)
         strategy_dt = JsonCssExtractionStrategy(schema_dt, verbose=False)
@@ -259,7 +280,7 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
         # Execute crawls
         if crawler is None:
             # Create a new crawler if none provided
-            async with AsyncWebCrawler(verbose=False) as new_crawler:
+            async with AsyncWebCrawler(verbose=False, browser_config=browser_config) as new_crawler:
                 return await _execute_crawls(new_crawler, target_url, config_dd, config_dt)
         else:
             # Use the provided crawler
