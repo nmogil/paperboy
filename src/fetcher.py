@@ -261,7 +261,10 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
             '--disable-dbus',
             '--no-zygote'
         ]
-        browser_config = BrowserConfig(extra_args=playwright_launch_args)
+        browser_config = BrowserConfig(
+            extra_args=playwright_launch_args,
+            navigation_options={"timeout": 120000}  # 120 seconds
+        )
         
         # Create extraction strategies
         strategy_dd = JsonCssExtractionStrategy(schema_dd, verbose=False)

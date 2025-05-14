@@ -120,7 +120,7 @@ async def _scrape_ranked_articles(
             # Append a placeholder for articles without HTML URL
             # Create a future that immediately returns None
             future = asyncio.get_event_loop().create_future()
-            future.set_result((None, "No HTML URL provided")) # Tuple (content, error)
+            future.set_result((None, "No HTML URL")) # Tuple (content, error)
             tasks.append(future)
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -393,7 +393,7 @@ async def main():
         browser_config = BrowserConfig(extra_args=playwright_launch_args)
 
         # Create a single crawler instance for both fetching and scraping
-        async with AsyncWebCrawler(verbose=False, browser_config=browser_config) as crawler:
+        async with AsyncWebCrawler(verbose=False, config=browser_config) as crawler:
             # Determine target date
             fetch_date_str = settings.target_date
             if not fetch_date_str:
