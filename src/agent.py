@@ -390,7 +390,9 @@ async def main():
             '--disable-dbus',
             '--no-zygote'
         ]
-        browser_config = BrowserConfig(extra_args=playwright_launch_args)
+        browser_config = BrowserConfig(
+            extra_args=playwright_launch_args
+        )
 
         # Create a single crawler instance for both fetching and scraping
         async with AsyncWebCrawler(verbose=False, config=browser_config) as crawler:

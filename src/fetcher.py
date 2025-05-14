@@ -262,8 +262,7 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
             '--no-zygote'
         ]
         browser_config = BrowserConfig(
-            extra_args=playwright_launch_args,
-            navigation_options={"timeout": 120000}  # 120 seconds
+            extra_args=playwright_launch_args
         )
         
         # Create extraction strategies
@@ -273,11 +272,13 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
         # Configure crawler runs
         config_dd = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            extraction_strategy=strategy_dd
+            extraction_strategy=strategy_dd,
+            page_timeout=120000  # Add page_timeout here (120 seconds)
         )
         config_dt = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            extraction_strategy=strategy_dt
+            extraction_strategy=strategy_dt,
+            page_timeout=120000  # Add page_timeout here (120 seconds)
         )
         
         # Execute crawls

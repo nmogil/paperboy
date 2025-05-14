@@ -181,8 +181,7 @@ async def process_digest_request(
             '--no-zygote'
         ]
         browser_config = BrowserConfig(
-            extra_args=playwright_launch_args,
-            navigation_options={"timeout": 120000}  # 120 seconds
+            extra_args=playwright_launch_args
         )
 
         # Use async context manager for the crawler

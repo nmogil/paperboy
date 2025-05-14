@@ -126,7 +126,7 @@ async def scrape_article(crawler: AsyncWebCrawler, url: str) -> str:
     config = CrawlerRunConfig(
         extraction_strategy=JsonCssExtractionStrategy(c_schema, verbose=False),
         cache_mode=CacheMode.BYPASS,
-        page_timeout=settings.crawler_timeout # Use setting from config
+        page_timeout=120000 # Explicitly set to 120 seconds for testing
     )
 
     try:
