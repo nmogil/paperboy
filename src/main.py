@@ -163,69 +163,34 @@ async def process_digest_request(
         await send_callback(task_id, current_status, callback_url) # No result for PROCESSING
         
         playwright_launch_args = [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-
-            # --- Comprehensive GPU & Rendering Disabling ---
-            '--disable-gpu',
-            '--disable-gpu-sandbox',
-            '--disable-gpu-compositing',
-            '--disable-gpu-vsync',
-            '--disable-software-rasterizer',
-            '--disable-accelerated-2d-canvas',
-            '--disable-accelerated-jpeg-decoding',
-            '--disable-accelerated-mjpeg-decode',
-            '--disable-accelerated-video-decode',
-            '--disable-accelerated-video-encode',
-            '--disable-features=VizDisplayCompositor,DefaultANGLEVulkan,Vulkan,Metal,SkiaGraphite', # Refined disable-features
-            '--disable-skia-runtime-shader-cache',
-            '--disable-webgl',
-            '--disable-webgl2',
-            '--use-gl=swiftshader', # Force software GL
-
-            # --- Other essential arguments from your "Implementation Step" ---
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--disable-extensions',
-            '--disable-sync',
-            '--disable-translate',
-            '--metrics-recording-only',
-            '--mute-audio',
-            '--no-first-run',
-            '--safebrowsing-disable-auto-update',
-            '--disable-dbus',
-            '--no-zygote',
-            '--disable-breakpad',
-            '--disable-component-extensions-with-background-pages',
-            '--disable-component-update',
-            '--no-default-browser-check',
-            '--disable-client-side-phishing-detection',
-            '--disable-hang-monitor',
-            '--disable-ipc-flooding-protection',
-            '--disable-popup-blocking',
-            '--disable-prompt-on-repost',
-            '--disable-renderer-backgrounding',
-            '--force-color-profile=srgb',
-            '--password-store=basic',
-            '--use-mock-keychain',
-            '--no-service-autorun',
-            '--export-tagged-pdf',
-            '--disable-search-engine-choice-screen',
-            '--unsafely-disable-devtools-self-xss-warnings',
-            '--headless',
-            '--hide-scrollbars',
-            '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
-            # Consider adding for more detailed logs from Chromium if issues persist after this change:
-            # '--enable-logging=stderr',
-            # '--v=1',
+            "--disable-gpu",
+            "--single-process",
+            "--no-zygote",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-setuid-sandbox",
+            "--no-first-run",
+            "--disable-extensions",
+            "--disable-default-apps",
+            "--disable-translate",
+            "--disable-background-networking",
+            "--disable-sync",
+            "--disable-popup-blocking",
+            "--disable-component-update",
+            "--disable-client-side-phishing-detection",
+            "--disable-component-extensions-with-background-pages",
+            "--disable-ipc-flooding-protection",
+            "--enable-logging",
+            "--v=1",  # Enables verbose logging from Chromium
+            "--remote-debugging-port=9222",
         ]
-        browser_config = BrowserConfig(
-            extra_args=playwright_launch_args
+        browser_config_instance = BrowserConfig(
+            extra_args=playwright_launch_args,
+            verbose=False  # Or True, for debugging crawl4ai logs. Set this explicitly.
+                           # This is the 'verbose' for the browser's setup.
         )
 
-        # Use async context manager for the crawler
-        async with AsyncWebCrawler(config=browser_config) as crawler:
+        async with AsyncWebCrawler(config=browser_config_instance) as crawler:
             agent = create_agent()
             
             # Fetch articles using the managed crawler

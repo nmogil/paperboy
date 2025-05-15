@@ -244,145 +244,94 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
         logger.info(f"Fetching arXiv CS submissions from {target_url}")
         
         playwright_launch_args = [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-
-            # --- Comprehensive GPU & Rendering Disabling ---
-            '--disable-gpu',
-            '--disable-gpu-sandbox',
-            '--disable-gpu-compositing',
-            '--disable-gpu-vsync',
-            '--disable-software-rasterizer',
-            '--disable-accelerated-2d-canvas',
-            '--disable-accelerated-jpeg-decoding',
-            '--disable-accelerated-mjpeg-decode',
-            '--disable-accelerated-video-decode',
-            '--disable-accelerated-video-encode',
-            '--disable-features=VizDisplayCompositor,UseSkiaRenderer,DefaultANGLEVulkan,Vulkan',
-            '--disable-skia-runtime-shader-cache',
-            '--disable-webgl',
-            '--disable-webgl2',
-            '--use-gl=swiftshader', # Force software GL renderer
-
-            # --- Keep your other essential arguments ---
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--disable-extensions',
-            '--disable-sync',
-            '--disable-translate',
-            '--metrics-recording-only',
-            '--mute-audio',
-            '--no-first-run',
-            '--safebrowsing-disable-auto-update',
-            '--disable-dbus',
-            '--no-zygote',
-            '--disable-breakpad',
-            '--disable-component-extensions-with-background-pages',
-            '--disable-component-update',
-            '--no-default-browser-check',
-            '--disable-client-side-phishing-detection',
-            '--disable-hang-monitor',
-            '--disable-ipc-flooding-protection',
-            '--disable-popup-blocking',
-            '--disable-prompt-on-repost',
-            '--disable-renderer-backgrounding',
-            '--force-color-profile=srgb',
-            '--password-store=basic',
-            '--use-mock-keychain',
-            '--no-service-autorun',
-            '--export-tagged-pdf',
-            '--disable-search-engine-choice-screen',
-            '--unsafely-disable-devtools-self-xss-warnings',
-            '--headless', # Ensure this is present
-            '--hide-scrollbars',
-            '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
+            "--disable-gpu",
+            "--single-process",
+            "--no-zygote",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-setuid-sandbox",
+            "--no-first-run",
+            "--disable-extensions",
+            "--disable-default-apps",
+            "--disable-translate",
+            "--disable-background-networking",
+            "--disable-sync",
+            "--disable-popup-blocking",
+            "--disable-component-update",
+            "--disable-client-side-phishing-detection",
+            "--disable-component-extensions-with-background-pages",
+            "--disable-ipc-flooding-protection",
+            "--enable-logging",
+            "--v=1",
+            "--remote-debugging-port=9222",
         ]
-        browser_config = BrowserConfig(
-            extra_args=playwright_launch_args
-        )
         
-        # Create extraction strategies
-        strategy_dd = JsonCssExtractionStrategy(schema_dd, verbose=False)
-        strategy_dt = JsonCssExtractionStrategy(schema_dt, verbose=False)
-        
-        # Configure crawler runs
-        config_dd = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            extraction_strategy=strategy_dd,
-            page_timeout=120000  # Add page_timeout here (120 seconds)
+        # Define browser_config here, to be used if creating a new crawler
+        browser_config_for_fetcher = BrowserConfig(
+            extra_args=playwright_launch_args,
+            verbose=False # Explicitly set verbose
         )
-        config_dt = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            extraction_strategy=strategy_dt,
-            page_timeout=120000  # Add page_timeout here (120 seconds)
-        )
-        
-        # Execute crawls
+
+        # If no crawler is provided, create and manage one
         if crawler is None:
-            # Create a new crawler if none provided
-            async with AsyncWebCrawler(verbose=False, config=browser_config) as new_crawler:
-                return await _execute_crawls(new_crawler, target_url, config_dd, config_dt)
+            async with AsyncWebCrawler(config=browser_config_for_fetcher) as new_crawler:
+                return await _fetch_with_crawler(new_crawler, target_url, target_date)
         else:
-            # Use the provided crawler
-            return await _execute_crawls(crawler, target_url, config_dd, config_dt)
-            
+            # If a crawler is provided, use it directly
+            return await _fetch_with_crawler(crawler, target_url, target_date)
+
     except Exception as e:
         logger.error(f"An unexpected error occurred while fetching articles: {str(e)}", exc_info=True)
         return [] 
 
 async def _execute_crawls(crawler: AsyncWebCrawler, target_url: str, config_dd: CrawlerRunConfig, config_dt: CrawlerRunConfig) -> List[Dict[str, Any]]:
-    """Helper function to execute the two crawls (dt and dd) and merge results."""
-    logger.info(f"Executing crawls for target URL: {target_url}")
-
-    # --- Diagnostic Navigation ---
-    try:
-        logger.info("Attempting to navigate to about:blank for diagnostics...")
-        diag_config_blank = CrawlerRunConfig(page_timeout=30000, cache_mode=CacheMode.BYPASS)
-        result_blank = await crawler.arun(url="about:blank", config=diag_config_blank)
-        if result_blank.success:
-            logger.info("Successfully navigated to about:blank.")
-        else:
-            logger.error(f"Failed to navigate to about:blank: {result_blank.error_message or 'No error message'}")
-            # Potentially raise an error or return empty if this is critical
-            # For now, we'll log and continue to see if google.com works
-
-        logger.info("Attempting to navigate to https://www.google.com for diagnostics...")
-        diag_config_google = CrawlerRunConfig(page_timeout=120000, cache_mode=CacheMode.BYPASS) # Longer timeout for external site
-        result_google = await crawler.arun(url="https://www.google.com", config=diag_config_google)
-        if result_google.success:
-            logger.info("Successfully navigated to https://www.google.com.")
-        else:
-            logger.error(f"Failed to navigate to https://www.google.com: {result_google.error_message or 'No error message'}")
-            # Potentially raise an error or return empty
-
-    except Exception as e:
-        logger.error(f"Error during diagnostic navigation: {e}", exc_info=True)
-        # Decide if this should halt further execution. For now, log and continue.
-
-    # --- Actual Crawls ---
-    # Create tasks for both crawls
-    logger.info("Running crawler for <dd> elements...")
-    result_dd = await crawler.arun(url=target_url, config=config_dd)
-    if not result_dd.success or not result_dd.extracted_content:
-        logger.error(f"Failed to fetch details from {target_url}")
-        return []
+    """Helper function to execute crawls using provided configurations."""
+    # Perform the crawls
+    # Note: We are using the existing config_dd and config_dt passed in,
+    # and assuming their verbose flags are set appropriately by the caller of this function.
+    # If they need to be set here, the function signature and logic would need to change.
+    dt_result = await crawler.run(url=target_url, config=config_dt)
+    dd_result = await crawler.run(url=target_url, config=config_dd)
     
-    logger.info("Running crawler for <dt> elements...")
-    result_dt = await crawler.arun(url=target_url, config=config_dt)
-    if not result_dt.success or not result_dt.extracted_content:
-        logger.error(f"Failed to fetch titles from {target_url}")
-        return []
-    
-    try:
-        dd_data_list = json.loads(result_dd.extracted_content)
-        dt_data_list = json.loads(result_dt.extracted_content)
-        logger.info(f"Successfully extracted {len(dd_data_list)} <dd> entries and {len(dt_data_list)} <dt> entries.")
-    except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse JSON response: {str(e)}")
-        return []
+    dt_data = dt_result.data if dt_result and dt_result.data else []
+    dd_data = dd_result.data if dd_result and dd_result.data else []
     
     # Process and merge the data
-    articles = _process_and_merge_articles(dt_data_list, dd_data_list, base_url="https://arxiv.org")
+    articles = _process_and_merge_articles(dt_data, dd_data, base_url="https://arxiv.org")
+    logger.info(f"Successfully processed {len(articles)} articles")
+    return articles 
+
+async def _fetch_with_crawler(crawler: AsyncWebCrawler, target_url: str, target_date: str) -> List[Dict[str, Any]]:
+    """Internal helper to perform fetching and processing with a crawler instance."""
+    
+    # Define extraction strategies
+    strategy_dd = JsonCssExtractionStrategy(schema=schema_dd)
+    strategy_dt = JsonCssExtractionStrategy(schema=schema_dt)
+
+    # Define run configurations
+    config_dd = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        extraction_strategy=strategy_dd,
+        page_timeout=120000,
+        verbose=False # Explicitly set verbose
+    )
+    config_dt = CrawlerRunConfig(
+        cache_mode=CacheMode.BYPASS,
+        extraction_strategy=strategy_dt,
+        page_timeout=120000,
+        verbose=False # Explicitly set verbose
+    )
+
+    # Execute crawls
+    dt_result, dd_result = await asyncio.gather(
+        crawler.run(url=target_url, config=config_dt),
+        crawler.run(url=target_url, config=config_dd)
+    )
+    
+    dt_data = dt_result.data if dt_result and dt_result.data else []
+    dd_data = dd_result.data if dd_result and dd_result.data else []
+    
+    # Process and merge the data
+    articles = _process_and_merge_articles(dt_data, dd_data, base_url="https://arxiv.org")
     logger.info(f"Successfully processed {len(articles)} articles")
     return articles 
