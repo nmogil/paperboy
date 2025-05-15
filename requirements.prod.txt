@@ -10,4 +10,5 @@ pydantic-ai[logfire]
 pydantic-settings
 pyarrow
 pandas~=2.0.0  # Pinning pandas version to reduce size
-logfire[httpx] 
+logfire[httpx]
+gunicorn>=20.1.0  # Added for production deployment 

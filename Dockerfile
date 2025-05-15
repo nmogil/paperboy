@@ -4,7 +4,9 @@ FROM python:3.10-slim as builder
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PORT=8000 \
+    PYTHONPATH=/app
 
 # Set working directory
 WORKDIR /app
@@ -63,7 +65,14 @@ FROM python:3.10-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright
+    PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright \
+    PORT=8000 \
+    PYTHONPATH=/app \
+    # Cloud Run recommended environment variables
+    GUNICORN_WORKERS=1 \
+    GUNICORN_THREADS=8 \
+    GUNICORN_TIMEOUT=0 \
+    GUNICORN_KEEP_ALIVE=65
 
 # Set working directory
 WORKDIR /app
@@ -125,5 +134,11 @@ USER 10001:10001
 # Expose the port the app runs on
 EXPOSE 8000
 
-# Command to run the application
-CMD uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000} --log-level info
+# Health check configuration
+HEALTHCHECK --interval=30s --timeout=3s \
+    CMD curl -f http://localhost:${PORT}/diagnostics/logfire-health || exit 1
+
+# Command to run the application with Gunicorn for better performance
+CMD exec gunicorn --bind :$PORT --workers $GUNICORN_WORKERS --threads $GUNICORN_THREADS \
+    --timeout $GUNICORN_TIMEOUT --keep-alive $GUNICORN_KEEP_ALIVE --worker-class uvicorn.workers.UvicornWorker \
+    src.main:app
