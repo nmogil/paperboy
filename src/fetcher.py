@@ -247,8 +247,25 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
+
+            # --- Comprehensive GPU & Rendering Disabling ---
             '--disable-gpu',
+            '--disable-gpu-sandbox',
+            '--disable-gpu-compositing',
+            '--disable-gpu-vsync',
             '--disable-software-rasterizer',
+            '--disable-accelerated-2d-canvas',
+            '--disable-accelerated-jpeg-decoding',
+            '--disable-accelerated-mjpeg-decode',
+            '--disable-accelerated-video-decode',
+            '--disable-accelerated-video-encode',
+            '--disable-features=VizDisplayCompositor,UseSkiaRenderer,DefaultANGLEVulkan,Vulkan',
+            '--disable-skia-runtime-shader-cache',
+            '--disable-webgl',
+            '--disable-webgl2',
+            '--use-gl=swiftshader', # Force software GL renderer
+
+            # --- Keep your other essential arguments ---
             '--disable-background-networking',
             '--disable-default-apps',
             '--disable-extensions',
@@ -259,7 +276,27 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
             '--no-first-run',
             '--safebrowsing-disable-auto-update',
             '--disable-dbus',
-            '--no-zygote'
+            '--no-zygote',
+            '--disable-breakpad',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-component-update',
+            '--no-default-browser-check',
+            '--disable-client-side-phishing-detection',
+            '--disable-hang-monitor',
+            '--disable-ipc-flooding-protection',
+            '--disable-popup-blocking',
+            '--disable-prompt-on-repost',
+            '--disable-renderer-backgrounding',
+            '--force-color-profile=srgb',
+            '--password-store=basic',
+            '--use-mock-keychain',
+            '--no-service-autorun',
+            '--export-tagged-pdf',
+            '--disable-search-engine-choice-screen',
+            '--unsafely-disable-devtools-self-xss-warnings',
+            '--headless', # Ensure this is present
+            '--hide-scrollbars',
+            '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
         ]
         browser_config = BrowserConfig(
             extra_args=playwright_launch_args
@@ -295,7 +332,36 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
         return [] 
 
 async def _execute_crawls(crawler: AsyncWebCrawler, target_url: str, config_dd: CrawlerRunConfig, config_dt: CrawlerRunConfig) -> List[Dict[str, Any]]:
-    """Helper function to execute the crawls with a given crawler instance."""
+    """Helper function to execute the two crawls (dt and dd) and merge results."""
+    logger.info(f"Executing crawls for target URL: {target_url}")
+
+    # --- Diagnostic Navigation ---
+    try:
+        logger.info("Attempting to navigate to about:blank for diagnostics...")
+        diag_config_blank = CrawlerRunConfig(page_timeout=30000, cache_mode=CacheMode.BYPASS)
+        result_blank = await crawler.arun(url="about:blank", config=diag_config_blank)
+        if result_blank.success:
+            logger.info("Successfully navigated to about:blank.")
+        else:
+            logger.error(f"Failed to navigate to about:blank: {result_blank.error_message or 'No error message'}")
+            # Potentially raise an error or return empty if this is critical
+            # For now, we'll log and continue to see if google.com works
+
+        logger.info("Attempting to navigate to https://www.google.com for diagnostics...")
+        diag_config_google = CrawlerRunConfig(page_timeout=120000, cache_mode=CacheMode.BYPASS) # Longer timeout for external site
+        result_google = await crawler.arun(url="https://www.google.com", config=diag_config_google)
+        if result_google.success:
+            logger.info("Successfully navigated to https://www.google.com.")
+        else:
+            logger.error(f"Failed to navigate to https://www.google.com: {result_google.error_message or 'No error message'}")
+            # Potentially raise an error or return empty
+
+    except Exception as e:
+        logger.error(f"Error during diagnostic navigation: {e}", exc_info=True)
+        # Decide if this should halt further execution. For now, log and continue.
+
+    # --- Actual Crawls ---
+    # Create tasks for both crawls
     logger.info("Running crawler for <dd> elements...")
     result_dd = await crawler.arun(url=target_url, config=config_dd)
     if not result_dd.success or not result_dd.extracted_content:

@@ -178,7 +178,8 @@ async def process_digest_request(
             '--no-first-run',
             '--safebrowsing-disable-auto-update',
             '--disable-dbus',
-            '--no-zygote'
+            '--no-zygote',
+            '--disable-features=VizDisplayCompositor'
         ]
         browser_config = BrowserConfig(
             extra_args=playwright_launch_args
