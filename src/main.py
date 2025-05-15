@@ -166,8 +166,25 @@ async def process_digest_request(
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
+
+            # --- Comprehensive GPU & Rendering Disabling ---
             '--disable-gpu',
+            '--disable-gpu-sandbox',
+            '--disable-gpu-compositing',
+            '--disable-gpu-vsync',
             '--disable-software-rasterizer',
+            '--disable-accelerated-2d-canvas',
+            '--disable-accelerated-jpeg-decoding',
+            '--disable-accelerated-mjpeg-decode',
+            '--disable-accelerated-video-decode',
+            '--disable-accelerated-video-encode',
+            '--disable-features=VizDisplayCompositor,DefaultANGLEVulkan,Vulkan,Metal,SkiaGraphite', # Refined disable-features
+            '--disable-skia-runtime-shader-cache',
+            '--disable-webgl',
+            '--disable-webgl2',
+            '--use-gl=swiftshader', # Force software GL
+
+            # --- Other essential arguments from your "Implementation Step" ---
             '--disable-background-networking',
             '--disable-default-apps',
             '--disable-extensions',
@@ -179,7 +196,29 @@ async def process_digest_request(
             '--safebrowsing-disable-auto-update',
             '--disable-dbus',
             '--no-zygote',
-            '--disable-features=VizDisplayCompositor'
+            '--disable-breakpad',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-component-update',
+            '--no-default-browser-check',
+            '--disable-client-side-phishing-detection',
+            '--disable-hang-monitor',
+            '--disable-ipc-flooding-protection',
+            '--disable-popup-blocking',
+            '--disable-prompt-on-repost',
+            '--disable-renderer-backgrounding',
+            '--force-color-profile=srgb',
+            '--password-store=basic',
+            '--use-mock-keychain',
+            '--no-service-autorun',
+            '--export-tagged-pdf',
+            '--disable-search-engine-choice-screen',
+            '--unsafely-disable-devtools-self-xss-warnings',
+            '--headless',
+            '--hide-scrollbars',
+            '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
+            # Consider adding for more detailed logs from Chromium if issues persist after this change:
+            # '--enable-logging=stderr',
+            # '--v=1',
         ]
         browser_config = BrowserConfig(
             extra_args=playwright_launch_args
