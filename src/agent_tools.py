@@ -292,6 +292,7 @@ async def analyze_article(
             logger.error(f"Analysis agent output was not ArticleAnalysis as expected. Type: {type(res.output)}. Output: {res.output}")
             # Attempt to parse if it's a string that looks like JSON
             if isinstance(res.output, str):
+                logger.info(f"Raw LLM output (string) for ArticleAnalysis: {res.output}") # Log the raw string
                 try:
                     import json
                     data = json.loads(res.output)

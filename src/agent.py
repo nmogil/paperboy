@@ -205,6 +205,7 @@ async def rank_articles(
             # Fallback parsing
             logger.warning(f"Agent output was not List[RankedArticle] as expected (Type: {type(res.output)}). Attempting fallback parsing.")
             if isinstance(res.output, str):
+                 logger.info(f"Raw LLM output (string) for RankedArticle list: {res.output}") # Log the raw string
                  try:
                      RankedArticleListAdapter = TypeAdapter(List[RankedArticle])
                      ranked_articles_from_llm = RankedArticleListAdapter.validate_json(res.output)

@@ -341,15 +341,15 @@ async def _execute_crawls(crawler: AsyncWebCrawler, target_url: str, config_dd: 
 
     # --- Diagnostic Navigation ---
     try:
-        logger.info("Attempting to navigate to about:blank for diagnostics...")
-        diag_config_blank = CrawlerRunConfig(page_timeout=30000, cache_mode=CacheMode.BYPASS)
-        result_blank = await crawler.arun(url="about:blank", config=diag_config_blank)
-        if result_blank.success:
-            logger.info("Successfully navigated to about:blank.")
-        else:
-            logger.error(f"Failed to navigate to about:blank: {result_blank.error_message or 'No error message'}")
-            # Potentially raise an error or return empty if this is critical
-            # For now, we'll log and continue to see if google.com works
+        # logger.info("Attempting to navigate to about:blank for diagnostics...") # Removed
+        # diag_config_blank = CrawlerRunConfig(page_timeout=30000, cache_mode=CacheMode.BYPASS) # Removed
+        # result_blank = await crawler.arun(url="about:blank", config=diag_config_blank) # Removed
+        # if result_blank.success: # Removed
+        #     logger.info("Successfully navigated to about:blank.") # Removed
+        # else: # Removed
+        #     logger.error(f"Failed to navigate to about:blank: {result_blank.error_message or 'No error message'}") # Removed
+            # Potentially raise an error or return empty if this is critical # Removed
+            # For now, we'll log and continue to see if google.com works # Removed
 
         logger.info("Attempting to navigate to https://www.google.com for diagnostics...")
         diag_config_google = CrawlerRunConfig(page_timeout=120000, cache_mode=CacheMode.BYPASS) # Longer timeout for external site
