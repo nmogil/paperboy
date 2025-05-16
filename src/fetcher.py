@@ -223,23 +223,16 @@ def _process_and_merge_articles(dt_data_list: List[Dict[str, Any]], dd_data_list
 
 async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWebCrawler] = None) -> List[Dict[str, Any]]:
     """
-    Fetch Computer Science submissions from arXiv for a specific date.
+    Fetch and process arXiv CS submissions for a given date.
     
     Args:
-        target_date: Date string in YYYY-MM-DD format
-        crawler: Optional AsyncWebCrawler instance to use. If None, a new one will be created.
-    
+        target_date (str): Date in YYYY-MM-DD format
+        crawler (Optional[AsyncWebCrawler]): Optional crawler instance to reuse
+        
     Returns:
-        List of dictionaries containing article information
+        List[Dict[str, Any]]: List of processed article data
     """
     try:
-        # Validate date format
-        try:
-            datetime.strptime(target_date, "%Y-%m-%d")
-        except ValueError as e:
-            logger.error(f"Invalid date format for {target_date}. Expected YYYY-MM-DD")
-            return []
-
         target_url = f"https://arxiv.org/catchup/cs/{target_date}"
         logger.info(f"Fetching arXiv CS submissions from {target_url}")
         
@@ -259,13 +252,23 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
             '--disable-accelerated-mjpeg-decode',
             '--disable-accelerated-video-decode',
             '--disable-accelerated-video-encode',
-            '--disable-features=VizDisplayCompositor,UseSkiaRenderer,DefaultANGLEVulkan,Vulkan',
+            '--disable-features=VizDisplayCompositor,UseSkiaRenderer,DefaultANGLEVulkan,Vulkan,Metal,SkiaGraphite',
             '--disable-skia-runtime-shader-cache',
             '--disable-webgl',
             '--disable-webgl2',
-            '--use-gl=swiftshader', # Force software GL renderer
+            '--use-gl=swiftshader',
 
-            # --- Keep your other essential arguments ---
+            # --- Memory & Process Management ---
+            '--single-process',  # Run browser in single process
+            '--no-zygote',      # Disable zygote process
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-video-decode',
+            '--disable-accelerated-video-encode',
+            '--disable-gpu-compositing',
+            '--deterministic-fetch',  # Make network fetches deterministic
+            '--disk-cache-size=0',    # Disable disk cache
+            '--media-cache-size=0',   # Disable media cache
             '--disable-background-networking',
             '--disable-default-apps',
             '--disable-extensions',
@@ -276,7 +279,6 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
             '--no-first-run',
             '--safebrowsing-disable-auto-update',
             '--disable-dbus',
-            '--no-zygote',
             '--disable-breakpad',
             '--disable-component-extensions-with-background-pages',
             '--disable-component-update',
@@ -294,14 +296,21 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
             '--export-tagged-pdf',
             '--disable-search-engine-choice-screen',
             '--unsafely-disable-devtools-self-xss-warnings',
-            '--headless', # Ensure this is present
+            '--headless=new',  # Use new headless mode
             '--hide-scrollbars',
             '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
+            '--enable-logging=stderr',  # Enable logging to stderr
+            '--v=1',                    # Verbose logging level
         ]
-        # Original browser_config, now with verbose=False directly
+
+        # Configure browser with updated settings
         browser_config = BrowserConfig(
             extra_args=playwright_launch_args,
-            verbose=False # Explicitly set verbose
+            verbose=True,  # Enable verbose logging for debugging
+            timeout=120000,  # Increase timeout to 2 minutes
+            viewport={'width': 1280, 'height': 720},  # Set a standard viewport size
+            ignore_https_errors=True,  # Ignore HTTPS errors
+            bypass_csp=True,  # Bypass Content Security Policy
         )
         
         # Create extraction strategies (verbose was already correctly False on these)

@@ -66,6 +66,9 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/local/ms-playwright/chromium-*/chrome \
+    CHROMIUM_FLAGS="--disable-dev-shm-usage --no-sandbox --disable-setuid-sandbox" \
     PORT=8000 \
     PYTHONPATH=/app \
     # Cloud Run recommended environment variables
@@ -102,7 +105,13 @@ RUN apt-get update && \
     libpango-1.0-0 \
     libcairo2 \
     libasound2 \
-    libatspi2.0-0 && \
+    libatspi2.0-0 \
+    fonts-liberation \
+    libu2f-udev \
+    xdg-utils \
+    xvfb \
+    iputils-ping \
+    net-tools && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
