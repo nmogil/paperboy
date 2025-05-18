@@ -68,14 +68,16 @@ ENV PYTHONUNBUFFERED=1 \
     PLAYWRIGHT_BROWSERS_PATH=/usr/local/ms-playwright \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/local/ms-playwright/chromium-*/chrome \
-    CHROMIUM_FLAGS="--disable-dev-shm-usage --no-sandbox --disable-setuid-sandbox" \
+    CHROMIUM_FLAGS="--disable-dev-shm-usage --no-sandbox --disable-setuid-sandbox --disable-gpu --disable-software-rasterizer --no-zygote" \
     PORT=8000 \
     PYTHONPATH=/app \
     # Cloud Run recommended environment variables
     GUNICORN_WORKERS=1 \
     GUNICORN_THREADS=8 \
     GUNICORN_TIMEOUT=0 \
-    GUNICORN_KEEP_ALIVE=65
+    GUNICORN_KEEP_ALIVE=65 \
+    # Add for DBus functionality
+    DBUS_SESSION_BUS_ADDRESS=/dev/null
 
 # Set working directory
 WORKDIR /app
@@ -85,10 +87,17 @@ COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder $PLAYWRIGHT_BROWSERS_PATH $PLAYWRIGHT_BROWSERS_PATH
 
-# Install only runtime dependencies
+# Install only runtime dependencies - updated with more complete Chrome dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+    # Basic system utilities
     curl \
+    iputils-ping \
+    net-tools \
+    xvfb \
+    dbus \
+    dbus-x11 \
+    # Chrome dependencies
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -102,16 +111,32 @@ RUN apt-get update && \
     libxfixes3 \
     libxrandr2 \
     libgbm1 \
+    libglib2.0-0 \
     libpango-1.0-0 \
+    libpangocairo-1.0-0 \
     libcairo2 \
     libasound2 \
     libatspi2.0-0 \
+    libx11-6 \
+    libx11-xcb1 \
+    libxcb1 \
+    libxcb-dri3-0 \
+    libxcb-shm0 \
+    libxcursor1 \
+    libxext6 \
+    libxi6 \
+    libxtst6 \
+    libxss1 \
+    # Font support
     fonts-liberation \
+    fonts-noto-color-emoji \
+    # Additional dependencies
     libu2f-udev \
-    xdg-utils \
-    xvfb \
-    iputils-ping \
-    net-tools && \
+    xdg-utils && \
+    # Configure dbus to work without systemd socket
+    mkdir -p /var/run/dbus && \
+    dbus-uuidgen > /var/lib/dbus/machine-id && \
+    # Clean up
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -125,7 +150,11 @@ RUN groupadd --system --gid 10001 app && \
     chmod 440 /app/config && \
     # Ensure Playwright permissions
     chown -R app:app $PLAYWRIGHT_BROWSERS_PATH && \
-    chmod -R 750 $PLAYWRIGHT_BROWSERS_PATH
+    chmod -R 750 $PLAYWRIGHT_BROWSERS_PATH && \
+    # Create and set permissions for DBus directories
+    mkdir -p /var/run/dbus && \
+    chown app:app /var/run/dbus && \
+    chmod 755 /var/run/dbus
 
 # Copy application files with strict permissions
 COPY --chown=app:app src/ /app/src/
