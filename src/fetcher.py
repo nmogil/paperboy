@@ -307,10 +307,9 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
         browser_config = BrowserConfig(
             extra_args=playwright_launch_args,
             verbose=True,  # Enable verbose logging for debugging
-            timeout=120000,  # Increase timeout to 2 minutes
-            viewport={'width': 1280, 'height': 720},  # Set a standard viewport size
+            viewport_width=1280,  # Set viewport width
+            viewport_height=720,  # Set viewport height
             ignore_https_errors=True,  # Ignore HTTPS errors
-            bypass_csp=True,  # Bypass Content Security Policy
         )
         
         # Create extraction strategies (verbose was already correctly False on these)
