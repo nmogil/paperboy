@@ -1,3 +1,5 @@
+![Article Ranking Agent Logo](https://drive.google.com/uc?id=1PxX3Z9J9pXqCHcqjieCMphAKggo0ZP5e)
+
 # Article Ranking Agent
 
 A sophisticated AI agent that intelligently finds and ranks relevant academic papers based on user information and research interests. Built with modern Python practices, FastAPI, and robust error handling.
