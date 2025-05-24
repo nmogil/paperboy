@@ -163,28 +163,30 @@ async def process_digest_request(
         await send_callback(task_id, current_status, callback_url) # No result for PROCESSING
         
         playwright_launch_args = [
+            # --- Core Security & Sandboxing ---
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-
-            # --- Comprehensive GPU & Rendering Disabling ---
+            '--single-process',
+            '--no-zygote',
+            
+            # --- GPU & Rendering (optimized for headless) ---
             '--disable-gpu',
             '--disable-gpu-sandbox',
             '--disable-gpu-compositing',
-            '--disable-gpu-vsync',
             '--disable-software-rasterizer',
             '--disable-accelerated-2d-canvas',
-            '--disable-accelerated-jpeg-decoding',
-            '--disable-accelerated-mjpeg-decode',
-            '--disable-accelerated-video-decode',
-            '--disable-accelerated-video-encode',
-            '--disable-features=VizDisplayCompositor,DefaultANGLEVulkan,Vulkan,Metal,SkiaGraphite', # Refined disable-features
-            '--disable-skia-runtime-shader-cache',
             '--disable-webgl',
             '--disable-webgl2',
-            '--use-gl=swiftshader', # Force software GL
+            '--use-gl=swiftshader',
 
-            # --- Other essential arguments from your "Implementation Step" ---
+            # --- Memory & Performance ---
+            '--memory-pressure-off',
+            '--disk-cache-size=0',
+            '--media-cache-size=0',
+            '--aggressive-cache-discard',
+            
+            # --- Network & Services ---
             '--disable-background-networking',
             '--disable-default-apps',
             '--disable-extensions',
@@ -216,13 +218,16 @@ async def process_digest_request(
             '--headless',
             '--hide-scrollbars',
             '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
-            # Consider adding for more detailed logs from Chromium if issues persist after this change:
-            # '--enable-logging=stderr',
-            # '--v=1',
+            '--disable-logging',
+            '--log-level=3',
         ]
-        browser_config_instance = BrowserConfig( # Renamed from browser_config and added verbose
+        browser_config_instance = BrowserConfig(
+            browser_type="chromium",
+            headless=True,
             extra_args=playwright_launch_args,
-            verbose=False  # Explicitly set verbose for the browser's setup.
+            verbose=False,
+            text_mode=True,
+            light_mode=True,
         )
 
         async with AsyncWebCrawler(config=browser_config_instance) as crawler: # Use browser_config_instance

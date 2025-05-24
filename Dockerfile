@@ -76,8 +76,13 @@ ENV PYTHONUNBUFFERED=1 \
     GUNICORN_THREADS=8 \
     GUNICORN_TIMEOUT=0 \
     GUNICORN_KEEP_ALIVE=65 \
-    # Add for DBus functionality
-    DBUS_SESSION_BUS_ADDRESS=/dev/null
+    # DBus and Chrome configuration
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/dbus/session_bus_socket" \
+    DISPLAY=:99 \
+    # Chrome stability settings
+    CHROME_NO_SANDBOX=1 \
+    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/local/ms-playwright/chromium-*/chrome
 
 # Set working directory
 WORKDIR /app
@@ -133,9 +138,13 @@ RUN apt-get update && \
     # Additional dependencies
     libu2f-udev \
     xdg-utils && \
-    # Configure dbus to work without systemd socket
-    mkdir -p /var/run/dbus && \
+    # Create DBus machine ID and proper directory structure
+    mkdir -p /var/run/dbus /var/lib/dbus /tmp/dbus && \
     dbus-uuidgen > /var/lib/dbus/machine-id && \
+    chmod 644 /var/lib/dbus/machine-id && \
+    # Set up DBus session for non-root user
+    echo '#!/bin/bash\nexport DBUS_SESSION_BUS_ADDRESS="unix:path=/tmp/dbus/session_bus_socket"\nmkdir -p /tmp/dbus\ndbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --nofork --nopidfile --syslog-only &\nexec "$@"' > /usr/local/bin/start-with-dbus.sh && \
+    chmod +x /usr/local/bin/start-with-dbus.sh && \
     # Clean up
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
@@ -143,7 +152,7 @@ RUN apt-get update && \
 # Create a non-root user with specific UID/GID
 RUN groupadd --system --gid 10001 app && \
     useradd --system --uid 10001 --gid app --no-create-home app && \
-    mkdir -p /app/config && \
+    mkdir -p /app/config /tmp/dbus && \
     # Set strict permissions
     chown -R app:app /app && \
     chmod -R 750 /app && \
@@ -151,10 +160,9 @@ RUN groupadd --system --gid 10001 app && \
     # Ensure Playwright permissions
     chown -R app:app $PLAYWRIGHT_BROWSERS_PATH && \
     chmod -R 750 $PLAYWRIGHT_BROWSERS_PATH && \
-    # Create and set permissions for DBus directories
-    mkdir -p /var/run/dbus && \
-    chown app:app /var/run/dbus && \
-    chmod 755 /var/run/dbus
+    # Create and set permissions for DBus and temp directories
+    chown -R app:app /tmp/dbus /var/run/dbus && \
+    chmod -R 755 /tmp/dbus /var/run/dbus
 
 # Copy application files with strict permissions
 COPY --chown=app:app src/ /app/src/
@@ -177,6 +185,6 @@ HEALTHCHECK --interval=30s --timeout=3s \
     CMD curl -f http://localhost:${PORT}/diagnostics/logfire-health || exit 1
 
 # Command to run the application with Gunicorn for better performance
-CMD exec gunicorn --bind :$PORT --workers $GUNICORN_WORKERS --threads $GUNICORN_THREADS \
-    --timeout $GUNICORN_TIMEOUT --keep-alive $GUNICORN_KEEP_ALIVE --worker-class uvicorn.workers.UvicornWorker \
-    src.main:app
+CMD ["/usr/local/bin/start-with-dbus.sh", "gunicorn", "--bind", ":8000", "--workers", "1", "--threads", "8", \
+    "--timeout", "0", "--keep-alive", "65", "--worker-class", "uvicorn.workers.UvicornWorker", \
+    "src.main:app"]

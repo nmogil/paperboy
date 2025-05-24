@@ -237,79 +237,107 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
         logger.info(f"Fetching arXiv CS submissions from {target_url}")
         
         playwright_launch_args = [
+            # --- Core Security & Sandboxing ---
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-
-            # --- Comprehensive GPU & Rendering Disabling ---
+            '--single-process',  # Use single process for better stability in containers
+            '--no-zygote',       # Disable zygote process
+            
+            # --- GPU & Rendering (optimized for headless) ---
             '--disable-gpu',
             '--disable-gpu-sandbox',
             '--disable-gpu-compositing',
-            '--disable-gpu-vsync',
             '--disable-software-rasterizer',
             '--disable-accelerated-2d-canvas',
             '--disable-accelerated-jpeg-decoding',
             '--disable-accelerated-mjpeg-decode',
             '--disable-accelerated-video-decode',
             '--disable-accelerated-video-encode',
-            '--disable-features=VizDisplayCompositor,UseSkiaRenderer,DefaultANGLEVulkan,Vulkan,Metal,SkiaGraphite',
-            '--disable-skia-runtime-shader-cache',
+            '--disable-features=VizDisplayCompositor,UseSkiaRenderer,DefaultANGLEVulkan,Vulkan,Metal,SkiaGraphite,TranslateUI',
             '--disable-webgl',
             '--disable-webgl2',
             '--use-gl=swiftshader',
-
+            
             # --- Memory & Process Management ---
-            '--single-process',  # Run browser in single process
-            '--no-zygote',      # Disable zygote process
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-video-decode',
-            '--disable-accelerated-video-encode',
-            '--disable-gpu-compositing',
-            '--deterministic-fetch',  # Make network fetches deterministic
-            '--disk-cache-size=0',    # Disable disk cache
-            '--media-cache-size=0',   # Disable media cache
+            '--memory-pressure-off',
+            '--max_old_space_size=4096',
+            '--disk-cache-size=0',
+            '--media-cache-size=0',
+            '--aggressive-cache-discard',
+            
+            # --- Network & Connectivity ---
             '--disable-background-networking',
-            '--disable-default-apps',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+            
+            # --- Extensions & Apps ---
             '--disable-extensions',
+            '--disable-default-apps',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-component-update',
+            
+            # --- Automation & Dev Tools ---
+            '--disable-blink-features=AutomationControlled',
+            '--disable-dev-shm-usage',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-infobars',
+            
+            # --- Audio & Media ---
+            '--mute-audio',
+            '--disable-audio-output',
+            
+            # --- Security Features ---
+            '--disable-web-security',
+            '--disable-features=VizDisplayCompositor',
+            '--disable-ipc-flooding-protection',
+            '--ignore-certificate-errors',
+            '--ignore-ssl-errors',
+            '--ignore-certificate-errors-spki-list',
+            
+            # --- DBus & System Services ---
+            '--disable-dbus',
+            '--no-service-autorun',
+            '--disable-breakpad',
+            '--disable-client-side-phishing-detection',
+            
+            # --- UI & Display ---
+            '--headless=new',
+            '--hide-scrollbars',
+            '--force-color-profile=srgb',
+            '--window-size=1280,720',
+            '--virtual-time-budget=300000',  # 5 minute budget for virtual time
+            
+            # --- Performance Optimizations ---
+            '--disable-hang-monitor',
+            '--disable-prompt-on-repost',
+            '--disable-popup-blocking',
             '--disable-sync',
             '--disable-translate',
             '--metrics-recording-only',
-            '--mute-audio',
-            '--no-first-run',
-            '--safebrowsing-disable-auto-update',
-            '--disable-dbus',
-            '--disable-breakpad',
-            '--disable-component-extensions-with-background-pages',
-            '--disable-component-update',
-            '--no-default-browser-check',
-            '--disable-client-side-phishing-detection',
-            '--disable-hang-monitor',
-            '--disable-ipc-flooding-protection',
-            '--disable-popup-blocking',
-            '--disable-prompt-on-repost',
-            '--disable-renderer-backgrounding',
-            '--force-color-profile=srgb',
             '--password-store=basic',
             '--use-mock-keychain',
-            '--no-service-autorun',
-            '--export-tagged-pdf',
-            '--disable-search-engine-choice-screen',
-            '--unsafely-disable-devtools-self-xss-warnings',
-            '--headless=new',  # Use new headless mode
-            '--hide-scrollbars',
-            '--blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4',
-            '--enable-logging=stderr',  # Enable logging to stderr
-            '--v=1',                    # Verbose logging level
+            '--safebrowsing-disable-auto-update',
+            
+            # --- Logging (disabled for production) ---
+            '--disable-logging',
+            '--log-level=3',  # Only fatal errors
         ]
 
         # Configure browser with updated settings
         browser_config = BrowserConfig(
+            browser_type="chromium",
+            headless=True,
             extra_args=playwright_launch_args,
-            verbose=True,  # Enable verbose logging for debugging
+            verbose=False,  # Disable verbose logging for production
             viewport_width=1280,  # Set viewport width
             viewport_height=720,  # Set viewport height
             ignore_https_errors=True,  # Ignore HTTPS errors
+            text_mode=True,  # Enable text mode for faster processing
+            light_mode=True,  # Enable light mode for better performance
         )
         
         # Create extraction strategies (verbose was already correctly False on these)
@@ -331,10 +359,41 @@ async def fetch_arxiv_cs_submissions(target_date: str, crawler: Optional[AsyncWe
         )
         
         # If no crawler is provided, create and manage one
-        # AsyncWebCrawler's verbose was already False, browser_config now has verbose=False directly
         if crawler is None:
-            async with AsyncWebCrawler(verbose=False, config=browser_config) as new_crawler:
-                return await _execute_crawls(new_crawler, target_url, config_dd, config_dt)
+            try:
+                logger.info("Creating new AsyncWebCrawler instance...")
+                async with AsyncWebCrawler(verbose=False, config=browser_config) as new_crawler:
+                    logger.info("AsyncWebCrawler initialized successfully")
+                    return await _execute_crawls(new_crawler, target_url, config_dd, config_dt)
+            except Exception as browser_error:
+                logger.error(f"Failed to initialize browser: {browser_error}")
+                # Try with minimal configuration as fallback
+                logger.info("Attempting fallback with minimal browser configuration...")
+                minimal_args = [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--headless',
+                    '--disable-gpu',
+                    '--single-process',
+                    '--no-zygote',
+                    '--disable-dbus',
+                    '--disable-extensions',
+                    '--disable-logging'
+                ]
+                fallback_config = BrowserConfig(
+                    browser_type="chromium",
+                    headless=True,
+                    extra_args=minimal_args,
+                    verbose=False,
+                )
+                try:
+                    async with AsyncWebCrawler(verbose=False, config=fallback_config) as fallback_crawler:
+                        logger.info("Fallback AsyncWebCrawler initialized successfully")
+                        return await _execute_crawls(fallback_crawler, target_url, config_dd, config_dt)
+                except Exception as fallback_error:
+                    logger.error(f"Fallback browser initialization also failed: {fallback_error}")
+                    raise browser_error  # Re-raise original error
         else:
             # If a crawler is provided, use it directly
             return await _execute_crawls(crawler, target_url, config_dd, config_dt)
