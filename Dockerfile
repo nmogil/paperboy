@@ -123,7 +123,7 @@ ENV HOME=/tmp
 USER 10001:10001
 
 # Expose the port the app runs on
-EXPOSE 8000
+EXPOSE 8080
 
-# Command to run the application
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
+# Command to run the application - use PORT environment variable for Cloud Run compatibility
+CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8080} --log-level info"]

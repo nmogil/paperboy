@@ -8,10 +8,11 @@ services:
       dockerfile: Dockerfile
     container_name: paperboy-api
     ports:
-      - "127.0.0.1:8000:8000"  # Only bind to localhost
+      - "127.0.0.1:8000:8080"  # Map local 8000 to container 8080
     env_file:
       - ./config/.env
     environment:
+      - PORT=8080  # Set port for Cloud Run compatibility
       - LOG_LEVEL=WARNING  # Set to WARNING in production
       - UVICORN_ACCESS_LOG=0  # Disable access logging in production
       - UVICORN_LOG_LEVEL=warning
@@ -29,7 +30,7 @@ services:
       - /run
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/diagnostics/logfire-health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/diagnostics/logfire-health"]
       interval: 21600s  # Changed from 60s to 6h (6 * 60 * 60 = 21600 seconds)
       timeout: 10s
       retries: 3
