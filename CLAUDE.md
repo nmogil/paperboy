@@ -11,15 +11,12 @@ Paperboy is an AI-powered academic paper recommendation system that ranks and an
 ### Running the Service
 
 ```bash
-# Development with Docker Compose
-docker-compose up --build
-
-# Lightweight version (without full scraping)
+# Development with Docker Compose (Lightweight version)
 docker-compose -f docker-compose.lightweight.yaml up --build
 
 # Production deployment
-docker build -t paperboy:optimized-v2 -f Dockerfile.full .
-docker run -p 8000:8000 --env-file config/.env paperboy:optimized-v2
+docker build -t paperboy:latest .
+docker run -p 8000:8000 --env-file config/.env paperboy:latest
 
 # Cloud Run deployment
 ./deploy_cloudrun.sh
@@ -42,7 +39,7 @@ pytest --cov=src
 
 ```bash
 # Install dependencies
-pip install -r requirements.txt
+pip install -r requirements.lightweight.txt
 
 # Run locally without Docker
 uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
@@ -54,8 +51,8 @@ The codebase follows a modular architecture with clear separation of concerns:
 
 1. **API Layer** (`main.py`): FastAPI application handling HTTP endpoints and background tasks
 2. **Agent System** (`agent.py`): Core AI logic using Pydantic AI for paper ranking and analysis
-3. **Data Fetching** (`fetcher.py`): Web scraping of arXiv using Crawl4AI with Playwright
-4. **Agent Tools** (`agent_tools.py`): Article content extraction and LLM-based analysis
+3. **Data Fetching** (`fetcher_lightweight.py`): Web scraping of arXiv using httpx (lightweight HTTP client)
+4. **Agent Tools** (`agent_tools_lightweight.py`): Article content extraction and LLM-based analysis
 5. **Models** (`models.py`): Pydantic models for type safety across the system
 6. **Configuration** (`config.py`): Centralized settings management via environment variables
 
@@ -71,7 +68,8 @@ The codebase follows a modular architecture with clear separation of concerns:
 
 - `pydantic-ai`: Agent framework for LLM orchestration
 - `openai`: GPT model integration for ranking and analysis
-- `crawl4ai`: Web scraping with browser automation
+- `httpx`: Async HTTP client for web scraping (lightweight alternative)
+- `beautifulsoup4`: HTML parsing for content extraction
 - `fastapi`: Modern async web framework
 - `logfire`: Production monitoring and observability
 
@@ -110,7 +108,8 @@ Production containers implement:
 
 ### Important Notes
 
-- The lightweight version (`fetcher_lightweight.py`, `agent_tools_lightweight.py`) uses httpx instead of Playwright for environments without browser support
+- The system now uses the lightweight implementation by default (`fetcher_lightweight.py`, `agent_tools_lightweight.py`) with httpx for better Cloud Run compatibility
 - State persistence uses JSON files in the `data/` directory
 - All LLM prompts are structured for JSON output (see `agent_prompts.py`)
 - The system handles rate limiting and retries automatically
+- The full implementation with Playwright/crawl4ai has been archived in `archived_full_implementation/` for future reference
