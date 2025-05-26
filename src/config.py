@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     ranking_input_max_articles: int = Field(default=20, validation_alias='RANKING_INPUT_MAX_ARTICLES', description="Maximum number of raw articles to send to the LLM for the ranking step.")
     target_date: Optional[str] = Field(default=None, validation_alias='TARGET_DATE', description="Target date for fetching arXiv articles (YYYY-MM-DD). Defaults to today if not set.")
     
+    # Lightweight mode configuration
+    use_lightweight: bool = Field(default=True, validation_alias='USE_LIGHTWEIGHT', description="Use lightweight version without Playwright")
+    http_timeout: int = Field(default=30, validation_alias='HTTP_TIMEOUT', description="HTTP request timeout in seconds")
+    max_retries: int = Field(default=3, validation_alias='MAX_RETRIES', description="Maximum number of retry attempts")
+    retry_delay: float = Field(default=1.0, validation_alias='RETRY_DELAY', description="Initial retry delay in seconds")
+    
     # Output file paths
     output_dir: str = Field(default='output', validation_alias='OUTPUT_DIR')
     ranking_output_file: str = Field(default='output/ranking_results.json', validation_alias='RANKING_OUTPUT_FILE')

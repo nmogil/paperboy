@@ -19,12 +19,18 @@ from pydantic_ai.providers.openai import OpenAIProvider
 # Import models from the new central location
 from .models import RankedArticle, ArticleAnalysis, UserContext, ScrapedArticle
 from .agent_prompts import SYSTEM_PROMPT, ARTICLE_ANALYSIS_PROMPT
-from .agent_tools import scrape_article, analyze_article
-from crawl4ai import AsyncWebCrawler, BrowserConfig # Correct import
-from .fetcher import fetch_arxiv_cs_submissions  # Import the new fetcher
 
 # Import settings from .config
 from .config import settings
+
+# Conditional imports based on lightweight mode
+if settings.use_lightweight:
+    from .agent_tools_lightweight import scrape_article, analyze_article
+    from .fetcher_lightweight import fetch_arxiv_cs_submissions
+else:
+    from .agent_tools import scrape_article, analyze_article
+    from crawl4ai import AsyncWebCrawler, BrowserConfig
+    from .fetcher import fetch_arxiv_cs_submissions
 
 # Configure logging
 logging.basicConfig(

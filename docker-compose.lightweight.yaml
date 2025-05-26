@@ -2,22 +2,24 @@ version: '3.8'
 
 services:
   api:
-    image: paperboy:optimized-v2
+    image: paperboy:lightweight
     build:
       context: .
-      dockerfile: Dockerfile.full
-    container_name: paperboy-api
+      dockerfile: Dockerfile
+    container_name: paperboy-api-lightweight
     ports:
       - "127.0.0.1:8000:8080"  # Map local 8000 to container 8080
     env_file:
       - ./config/.env
     environment:
-      - PORT=8080  # Set port for Cloud Run compatibility
-      - LOG_LEVEL=WARNING  # Set to WARNING in production
-      - UVICORN_ACCESS_LOG=0  # Disable access logging in production
-      - UVICORN_LOG_LEVEL=warning
+      - PORT=8080
+      - USE_LIGHTWEIGHT=true  # Ensure lightweight mode
+      - LOG_LEVEL=INFO
+      - UVICORN_ACCESS_LOG=1
+      - UVICORN_LOG_LEVEL=info
     volumes:
       - ./config/.env:/app/config/.env:ro  # Mount .env file as read-only
+      - ./data:/app/data  # Mount data directory for state persistence
     security_opt:
       - no-new-privileges:true  # Prevent privilege escalation
     cap_drop:
@@ -31,23 +33,23 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/diagnostics/logfire-health"]
-      interval: 21600s  # Changed from 60s to 6h (6 * 60 * 60 = 21600 seconds)
+      interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
     logging:
       driver: "json-file"
       options:
-        max-size: "100m"  # Increased for production
-        max-file: "5"  # Keep more log files
-        compress: "true"  # Enable compression
-        mode: "non-blocking"  # Non-blocking logging
-        max-buffer-size: "4m"  # Buffer size for non-blocking mode
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+        mode: "non-blocking"
+        max-buffer-size: "4m"
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 2G
+          cpus: '0.5'  # Reduced for lightweight
+          memory: 512M  # Reduced for lightweight
         reservations:
-          cpus: '0.25'
-          memory: 512M 
+          cpus: '0.1'
+          memory: 256M

@@ -1,0 +1,19 @@
+# Core framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.6
+pydantic-settings==2.7.1
+
+# AI/ML
+openai==1.82.0
+pydantic-ai==0.2.8
+
+# HTTP and parsing
+httpx==0.28.1
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# Utilities
+python-multipart==0.0.20
+logfire==2.8.0
+typing-extensions==4.12.2

@@ -29,7 +29,8 @@ paperboy/
 ├── data/                # Data files
 │   └── agent_state.json # Example agent state persistence
 ├── notebooks/           # Jupyter notebooks (for experimentation)
-├── Dockerfile          # Docker configuration
+├── Dockerfile          # Lightweight Docker configuration (default)
+├── Dockerfile.full     # Full Docker configuration with Playwright
 ├── docker-compose.yaml # Docker Compose configuration
 ├── .dockerignore       # Docker ignore rules
 ├── .gitignore          # Git ignore rules

@@ -9,6 +9,7 @@ Paperboy is an AI-powered academic paper recommendation system that ranks and an
 ## Key Commands
 
 ### Running the Service
+
 ```bash
 # Development with Docker Compose
 docker-compose up --build
@@ -17,7 +18,7 @@ docker-compose up --build
 docker-compose -f docker-compose.lightweight.yaml up --build
 
 # Production deployment
-docker build -t paperboy:optimized-v2 -f Dockerfile .
+docker build -t paperboy:optimized-v2 -f Dockerfile.full .
 docker run -p 8000:8000 --env-file config/.env paperboy:optimized-v2
 
 # Cloud Run deployment
@@ -25,6 +26,7 @@ docker run -p 8000:8000 --env-file config/.env paperboy:optimized-v2
 ```
 
 ### Testing
+
 ```bash
 # Run all tests
 pytest
@@ -37,6 +39,7 @@ pytest --cov=src
 ```
 
 ### Development Setup
+
 ```bash
 # Install dependencies
 pip install -r requirements.txt
@@ -75,6 +78,7 @@ The codebase follows a modular architecture with clear separation of concerns:
 ### Environment Configuration
 
 Required environment variables in `config/.env`:
+
 - `OPENAI_API_KEY`: OpenAI API access
 - `API_KEY`: Authentication for API endpoints
 - `OPENAI_MODEL`: Model selection (default: gpt-4o)
@@ -83,6 +87,7 @@ Required environment variables in `config/.env`:
 ### Testing Approach
 
 Tests use pytest with mocked OpenAI calls. Key test patterns:
+
 - Mock `openai.AsyncOpenAI` for deterministic testing
 - Test both ranking and analysis workflows
 - Validate model attributes and JSON parsing
@@ -90,6 +95,7 @@ Tests use pytest with mocked OpenAI calls. Key test patterns:
 ### Docker Security
 
 Production containers implement:
+
 - Non-root user (UID 10001)
 - Read-only filesystem with tmpfs mounts
 - Dropped capabilities except NET_BIND_SERVICE
