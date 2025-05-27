@@ -1,0 +1,50 @@
+# Alternative: Dynamic Cloud Build that uses deploy_cloudrun.sh settings
+steps:
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/paperboy-lightweight', '.']
+
+  # Push the Docker image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/paperboy-lightweight']
+
+  # Extract configuration from deploy_cloudrun.sh and deploy
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Extract settings from deploy_cloudrun.sh
+        SERVICE_NAME="paperboy"
+        REGION="us-central1"
+        MEMORY="512Mi"
+        CPU="1"
+        MIN_INSTANCES="0"
+        MAX_INSTANCES="50"
+        CONCURRENCY="1"
+        
+        # Get secrets from Secret Manager
+        SECRETS=""
+        for secret in OPENAI_API_KEY API_KEY LOGFIRE_TOKEN; do
+          if gcloud secrets describe $secret >/dev/null 2>&1; then
+            SECRETS="$SECRETS$secret=$secret:latest,"
+          fi
+        done
+        SECRETS="${SECRETS%,}"  # Remove trailing comma
+        
+        # Deploy with extracted settings
+        gcloud run deploy "$SERVICE_NAME" \
+          --image="gcr.io/$PROJECT_ID/paperboy-lightweight" \
+          --region="$REGION" \
+          --platform=managed \
+          --memory="$MEMORY" \
+          --cpu="$CPU" \
+          --min-instances="$MIN_INSTANCES" \
+          --max-instances="$MAX_INSTANCES" \
+          --concurrency="$CONCURRENCY" \
+          --timeout=3600 \
+          --no-allow-unauthenticated \
+          --set-env-vars="USE_LIGHTWEIGHT=true,PORT=8080" \
+          --set-secrets="$SECRETS"
+
+timeout: '1200s'

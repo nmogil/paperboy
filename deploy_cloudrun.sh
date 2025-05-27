@@ -9,11 +9,11 @@ PROJECT_ID="${GCP_PROJECT_ID:-}"
 SERVICE_NAME="${SERVICE_NAME:-paperboy}"
 REGION="${REGION:-us-central1}"
 IMAGE_NAME="${IMAGE_NAME:-paperboy-lightweight}"
-MEMORY="${MEMORY:-1Gi}"
+MEMORY="${MEMORY:-512Mi}"  # Reduced from 1Gi - sufficient for lightweight version
 CPU="${CPU:-1}"
 MIN_INSTANCES="${MIN_INSTANCES:-0}"
-MAX_INSTANCES="${MAX_INSTANCES:-100}"
-CONCURRENCY="${CONCURRENCY:-80}"
+MAX_INSTANCES="${MAX_INSTANCES:-50}"  # Need 50 instances for 50 concurrent requests
+CONCURRENCY="${CONCURRENCY:-1}"       # MUST be 1 due to in-memory state
 
 # Colors for output
 RED='\033[0;31m'
