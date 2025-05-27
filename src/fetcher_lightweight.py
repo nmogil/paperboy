@@ -65,8 +65,8 @@ async def _fetch_and_parse(client: httpx.AsyncClient, url: str) -> List[Dict[str
                     return []
                 await asyncio.sleep(2 ** attempt)  # Exponential backoff
         
-        # Parse HTML
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Parse HTML with lxml for better performance (5-10x faster than html.parser)
+        soup = BeautifulSoup(response.text, 'lxml')
         
         # Find the article list
         dl_articles = soup.find('dl', {'id': 'articles'})

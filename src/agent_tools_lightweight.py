@@ -76,8 +76,8 @@ async def scrape_article(client: httpx.AsyncClient, url: str) -> str:
                     return ""
                 await asyncio.sleep(2 ** attempt)  # Exponential backoff
         
-        # Parse HTML content
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Parse HTML content with lxml for better performance
+        soup = BeautifulSoup(response.text, 'lxml')
         
         # Try to extract from structured HTML article
         article_elem = soup.find('article', {'class': 'ltx_document'})
