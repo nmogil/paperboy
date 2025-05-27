@@ -173,7 +173,8 @@ async def process_digest_request(
     try:
         tasks[task_id]["status"] = "PROCESSING"
         current_status = "PROCESSING"
-        await send_callback(task_id, current_status, callback_url) # No result for PROCESSING
+        # Commented out to reduce noise - only send COMPLETED callbacks
+        # await send_callback(task_id, current_status, callback_url) # No result for PROCESSING
         
         agent = create_agent()
         
@@ -361,7 +362,8 @@ async def start_digest_generation(
     }
 
     # Send initial PENDING status update (no result)
-    await send_callback(task_id, "PENDING", request.callback_url)
+    # Commented out to reduce noise - only send COMPLETED callbacks
+    # await send_callback(task_id, "PENDING", request.callback_url)
 
     background_tasks.add_task(
         process_digest_request,

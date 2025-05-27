@@ -19,7 +19,7 @@ class GenerateDigestResponse(BaseModel):
 class DigestStatusResponse(BaseModel):
     """Response model for checking digest generation status."""
     task_id: str
-    status: str  # "PENDING", "PROCESSING", "COMPLETED", "FAILED"
+    status: str  # "PENDING", "PROCESSING", "COMPLETED", "FAILED" (callbacks only sent for COMPLETED/FAILED)
     result: Optional[str] = None  # HTML content when completed
     error: Optional[str] = None  # Error message if failed
     callback_url: Optional[str] = None  # Add optional callback_url (as string, since it's retrieved from storage) 
