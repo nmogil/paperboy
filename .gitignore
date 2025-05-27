@@ -45,4 +45,5 @@ tasks/
 notebooks/
 tests
 
-# pipedream/
+# Pipedream scripts (contain API keys)
+pipedream/
