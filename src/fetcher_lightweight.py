@@ -40,7 +40,7 @@ async def fetch_arxiv_cs_submissions(target_date: str, client: Optional[httpx.As
         
         # Create client if not provided
         if client is None:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as new_client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as new_client:
                 return await _fetch_and_parse(new_client, target_url)
         else:
             return await _fetch_and_parse(client, target_url)

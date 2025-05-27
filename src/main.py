@@ -1,7 +1,7 @@
 import uuid
 import os # Add this import
 
-from typing import Dict, Any, Union, Optional
+from typing import Dict, Any, Union, Optional, List
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Depends, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -13,6 +13,7 @@ import logging
 import httpx
 import logfire
 from pydantic import HttpUrl
+from functools import wraps
 
 # Import config first to check lightweight mode
 from .config import settings
@@ -134,7 +135,7 @@ async def send_callback(task_id: str, status: str, callback_url: Optional[HttpUr
         
         try:
             # Create client locally
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
                 response = await client.post(str(callback_url), json=payload)
                 response.raise_for_status() # Raise an exception for bad status codes
             logger.info(f"Callback sent successfully to {callback_url} for task {task_id}")
@@ -159,6 +160,26 @@ def create_agent() -> Agent:
         system_prompt=SYSTEM_PROMPT,
         retries=settings.agent_retries # Use 'retries' not 'max_retries' for Agent
     )
+
+async def process_with_timeout(
+    task_id: str,
+    user_info: Any,
+    target_date: Optional[str],
+    top_n: Optional[int],
+    callback_url: Optional[HttpUrl] = None
+) -> None:
+    """Wrapper to add timeout to process_digest_request"""
+    try:
+        await asyncio.wait_for(
+            process_digest_request(task_id, user_info, target_date, top_n, callback_url),
+            timeout=settings.task_timeout if hasattr(settings, 'task_timeout') else 300  # 5 minutes default
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"Task {task_id} timed out after {settings.task_timeout if hasattr(settings, 'task_timeout') else 300} seconds")
+        tasks[task_id]["status"] = "FAILED"
+        tasks[task_id]["error"] = "Request timed out after 5 minutes"
+        if callback_url:
+            await send_callback(task_id, "FAILED", callback_url, result="Request timed out")
 
 async def process_digest_request(
     task_id: str,
@@ -296,14 +317,29 @@ async def process_digest_request(
                 for url, content_or_error in scrape_results:
                     scraped_article_data[url] = content_or_error
         
-        # Analyze articles (common for both modes)
+        # Analyze articles (common for both modes) - Process in batches to prevent overload
         analyses = []
-        analysis_tasks = []
+        batch_size = 3  # Process 3 articles at a time
+        
+        # Prepare analysis tasks
+        analysis_jobs = []
         for article in ranked_articles:
             url_key = str(article.abstract_url)
             scraped_content = scraped_article_data.get(url_key)
             
             if scraped_content and not scraped_content.startswith("Scraping failed:"):
+                analysis_jobs.append((article, scraped_content))
+            elif scraped_content:
+                logger.warning(f"Skipping analysis for '{article.title}' due to scraping error: {scraped_content}")
+            else:
+                logger.warning(f"Skipping analysis for '{article.title}' because no scraped content was found (key: {url_key})")
+        
+        # Process in batches
+        for i in range(0, len(analysis_jobs), batch_size):
+            batch = analysis_jobs[i:i + batch_size]
+            batch_tasks = []
+            
+            for article, content in batch:
                 async def analysis_task(current_article, content):
                     try:
                         return await analyze_article(
@@ -315,15 +351,15 @@ async def process_digest_request(
                     except Exception as analysis_exc:
                         logger.error(f"Error during analyze_article call for {current_article.title}: {analysis_exc}", exc_info=True)
                         return None
-                analysis_tasks.append(analysis_task(article, scraped_content))
-            elif scraped_content:
-                logger.warning(f"Skipping analysis for '{article.title}' due to scraping error: {scraped_content}")
-            else:
-                logger.warning(f"Skipping analysis for '{article.title}' because no scraped content was found (key: {url_key})")
-
-        # Wait for all analysis tasks to complete
-        analysis_results = await asyncio.gather(*analysis_tasks)
-        analyses = [result for result in analysis_results if result is not None]
+                
+                batch_tasks.append(analysis_task(article, content))
+            
+            # Wait for batch to complete before starting next batch
+            batch_results = await asyncio.gather(*batch_tasks)
+            analyses.extend([result for result in batch_results if result is not None])
+            
+            # Log progress
+            logger.info(f"Completed analysis batch {i//batch_size + 1}/{(len(analysis_jobs) + batch_size - 1)//batch_size}")
         
         # Generate HTML
         html_content = generate_html_email(user_info, ranked_articles, analyses)
@@ -366,7 +402,7 @@ async def start_digest_generation(
     # await send_callback(task_id, "PENDING", request.callback_url)
 
     background_tasks.add_task(
-        process_digest_request,
+        process_with_timeout,
         task_id,
         request.user_info,
         request.target_date,

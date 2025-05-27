@@ -67,7 +67,7 @@ async def scrape_article(client: httpx.AsyncClient, url: str) -> str:
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                response = await client.get(url, timeout=30.0)
+                response = await client.get(url, timeout=10.0)
                 response.raise_for_status()
                 break
             except httpx.HTTPError as e:
@@ -188,7 +188,7 @@ async def scrape_articles_batch(urls: List[str], max_concurrent: int = 3) -> Dic
                 return url, ""
     
     # Use a single client for all requests
-    async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         # Create tasks for all URLs
         tasks = [scrape_with_semaphore(client, url) for url in urls]
         

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     http_timeout: int = Field(default=30, validation_alias='HTTP_TIMEOUT', description="HTTP request timeout in seconds")
     max_retries: int = Field(default=3, validation_alias='MAX_RETRIES', description="Maximum number of retry attempts")
     retry_delay: float = Field(default=1.0, validation_alias='RETRY_DELAY', description="Initial retry delay in seconds")
+    task_timeout: int = Field(default=300, validation_alias='TASK_TIMEOUT', description="Maximum time in seconds for a digest generation task")
     
     # Output file paths
     output_dir: str = Field(default='output', validation_alias='OUTPUT_DIR')
