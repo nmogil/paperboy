@@ -176,3 +176,145 @@ def _parse_article(dt_element, dd_element) -> Optional[Dict[str, Any]]:
 
 # Maintain compatibility with original fetcher
 fetch_arxiv_page = fetch_arxiv_cs_submissions
+
+class ArxivFetcher:
+    """Arxiv fetcher with connection pooling and improved performance."""
+    
+    def __init__(self):
+        # Use connection pooling for better performance
+        self.client = httpx.AsyncClient(
+            timeout=30.0,
+            limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
+        )
+        self.semaphore = asyncio.Semaphore(5)  # Limit concurrent requests
+    
+    async def fetch_arxiv_papers(self, category: str, max_results: int = 20) -> List[Dict[str, Any]]:
+        """Fetch papers from arXiv API for a specific category."""
+        try:
+            # Use arXiv API to fetch papers by category
+            api_url = f"http://export.arxiv.org/api/query?search_query=cat:{category}&start=0&max_results={max_results}&sortBy=lastUpdatedDate&sortOrder=descending"
+            
+            async with self.semaphore:
+                response = await self.client.get(api_url)
+                response.raise_for_status()
+            
+            # Parse the XML response
+            soup = BeautifulSoup(response.text, 'xml')
+            entries = soup.find_all('entry')
+            
+            articles = []
+            for entry in entries:
+                article = self._parse_api_entry(entry)
+                if article:
+                    articles.append(article)
+            
+            logger.info(f"Fetched {len(articles)} articles for category {category}")
+            return articles
+            
+        except Exception as e:
+            logger.error(f"Error fetching papers for category {category}: {e}")
+            return []
+    
+    def _parse_api_entry(self, entry) -> Optional[Dict[str, Any]]:
+        """Parse a single entry from arXiv API response."""
+        try:
+            article = {}
+            
+            # Extract basic info
+            title_elem = entry.find('title')
+            if title_elem:
+                article['title'] = title_elem.get_text(strip=True)
+            
+            # Extract URLs
+            id_elem = entry.find('id')
+            if id_elem:
+                article['url'] = id_elem.get_text(strip=True)
+                article['abstract_url'] = article['url']
+                
+                # Extract arxiv ID from URL
+                id_match = re.search(r'arxiv.org/abs/([^v]+)', article['url'])
+                if id_match:
+                    arxiv_id = id_match.group(1)
+                    article['pdf_url'] = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+            
+            # Extract authors
+            authors = []
+            for author in entry.find_all('author'):
+                name = author.find('name')
+                if name:
+                    authors.append(name.get_text(strip=True))
+            article['authors'] = authors
+            
+            # Extract categories/subjects
+            categories = []
+            primary_category = entry.find('arxiv:primary_category')
+            if primary_category:
+                article['subject'] = primary_category.get('term', '')
+                categories.append(article['subject'])
+            
+            for category in entry.find_all('category'):
+                term = category.get('term', '')
+                if term and term not in categories:
+                    categories.append(term)
+            article['categories'] = categories
+            
+            # Extract summary/abstract
+            summary_elem = entry.find('summary')
+            if summary_elem:
+                article['abstract'] = summary_elem.get_text(strip=True)
+            
+            # Only return if we have essential fields
+            if article.get('title') and article.get('url'):
+                return article
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error parsing API entry: {e}")
+            return None
+    
+    async def fetch_article_content(self, url: str) -> str:
+        """Fetch and extract article content with timeout."""
+        try:
+            async with self.semaphore:
+                response = await self.client.get(url, timeout=10.0)
+                response.raise_for_status()
+            
+            # Parse HTML and extract content
+            soup = BeautifulSoup(response.text, 'lxml')
+            
+            # Try to find the main content area
+            content_areas = [
+                soup.find('div', {'class': 'abstract'}),
+                soup.find('blockquote', {'class': 'abstract'}),
+                soup.find('div', {'id': 'abs'}),
+                soup.find('div', {'class': 'paper-content'}),
+                soup.find('article'),
+                soup.find('main')
+            ]
+            
+            for area in content_areas:
+                if area:
+                    # Extract text and clean it up
+                    text = area.get_text(separator='\n', strip=True)
+                    # Limit content length
+                    if len(text) > 8000:
+                        text = text[:8000] + "..."
+                    return text
+            
+            # Fallback: extract body text
+            if soup.body:
+                text = soup.body.get_text(separator='\n', strip=True)
+                # Clean up and limit
+                lines = [line.strip() for line in text.split('\n') if line.strip()]
+                text = '\n'.join(lines[:100])  # First 100 non-empty lines
+                return text[:8000] if len(text) > 8000 else text
+            
+            return "No content could be extracted from the page."
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch article content from {url}: {e}")
+            return ""
+    
+    async def close(self):
+        """Clean up client connections."""
+        await self.client.aclose()

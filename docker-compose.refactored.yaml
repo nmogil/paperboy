@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  api-refactored:
+    image: paperboy:refactored
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: paperboy-api-refactored
+    ports:
+      - "127.0.0.1:8001:8080"  # Different port (8001) to avoid conflict with existing
+    env_file:
+      - ./config/.env
+    environment:
+      - PORT=8080
+      - USE_LIGHTWEIGHT=true
+      - LOG_LEVEL=INFO  # More verbose for testing
+      - UVICORN_ACCESS_LOG=1  # Enable access logs for testing
+      - UVICORN_LOG_LEVEL=info
+    volumes:
+      - ./config/.env:/app/config/.env:ro
+      - ./data-refactored:/app/data  # Different data directory to avoid conflicts
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/digest-status/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+        mode: "non-blocking"
+        max-buffer-size: "4m"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M

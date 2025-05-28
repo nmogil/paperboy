@@ -2,6 +2,23 @@ from __future__ import annotations as _annotations
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator, TypeAdapter
 from typing import Any, List, Dict, Optional
+from enum import Enum
+
+# =============================
+#     TASK STATUS MODELS
+# =============================
+
+class TaskStatus(Enum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+class DigestStatus(BaseModel):
+    status: TaskStatus
+    message: str
+    result: Optional[str] = None
+    articles: Optional[List['ArticleAnalysis']] = None
 
 # =============================
 #     DATA MODELS (Moved from agent.py)
@@ -75,6 +92,12 @@ class ArticleAnalysis(BaseModel):
     summary: str = Field(..., description="A concise summary of the article's key findings and contributions.")
     importance: str = Field(..., description="Explanation of the article's importance or significance in its field and to the user's interests.")
     recommended_action: str = Field(..., description="Suggested next step for the user regarding this article (e.g., 'Read abstract', 'Skim PDF', 'Deep dive', 'Share with team', 'Ignore').")
+    key_findings: List[str] = Field(..., description="List of 3-5 main contributions and findings from the paper.")
+    relevance_to_user: str = Field(..., description="How this paper connects to the user's work and research interests.")
+    technical_details: str = Field(..., description="Important methods, techniques, or results from the paper.")
+    potential_applications: str = Field(..., description="How the user might apply this research in their own work.")
+    critical_notes: Optional[str] = Field(None, description="Limitations, concerns, or critical observations about the paper.")
+    follow_up_suggestions: Optional[str] = Field(None, description="Related papers or next steps for the user to explore.")
 
     # Optional: Add arxiv_id property if needed here too, or inherit/compose
     @property

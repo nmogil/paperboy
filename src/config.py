@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     retry_delay: float = Field(default=1.0, validation_alias='RETRY_DELAY', description="Initial retry delay in seconds")
     task_timeout: int = Field(default=300, validation_alias='TASK_TIMEOUT', description="Maximum time in seconds for a digest generation task")
     
+    # Observability
+    logfire_token: Optional[str] = Field(default=None, validation_alias='LOGFIRE_TOKEN', description="Logfire token for monitoring")
+    
     # Output file paths
     output_dir: str = Field(default='output', validation_alias='OUTPUT_DIR')
     ranking_output_file: str = Field(default='output/ranking_results.json', validation_alias='RANKING_OUTPUT_FILE')
