@@ -28,7 +28,6 @@ async def fetch_arxiv_cs_submissions(target_date: str, client: Optional[httpx.As
         List of dictionaries containing article information
     """
     try:
-        # Validate date format
         try:
             datetime.strptime(target_date, "%Y-%m-%d")
         except ValueError as e:
@@ -38,7 +37,6 @@ async def fetch_arxiv_cs_submissions(target_date: str, client: Optional[httpx.As
         target_url = f"https://arxiv.org/catchup/cs/{target_date}"
         logger.info(f"Fetching arXiv CS submissions from {target_url}")
         
-        # Create client if not provided
         if client is None:
             async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as new_client:
                 return await _fetch_and_parse(new_client, target_url)
@@ -52,7 +50,6 @@ async def fetch_arxiv_cs_submissions(target_date: str, client: Optional[httpx.As
 async def _fetch_and_parse(client: httpx.AsyncClient, url: str) -> List[Dict[str, Any]]:
     """Helper function to fetch and parse arXiv page."""
     try:
-        # Fetch the page with retry logic
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -63,18 +60,15 @@ async def _fetch_and_parse(client: httpx.AsyncClient, url: str) -> List[Dict[str
                 if attempt == max_retries - 1:
                     logger.error(f"Failed to fetch {url} after {max_retries} attempts: {e}")
                     return []
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+                await asyncio.sleep(2 ** attempt)
         
-        # Parse HTML with lxml for better performance (5-10x faster than html.parser)
         soup = BeautifulSoup(response.text, 'lxml')
         
-        # Find the article list
         dl_articles = soup.find('dl', {'id': 'articles'})
         if not dl_articles:
             logger.error(f"Could not find article list on {url}")
             return []
         
-        # Extract dt (links) and dd (metadata) elements
         dt_elements = dl_articles.find_all('dt')
         dd_elements = dl_articles.find_all('dd')
         
@@ -99,11 +93,9 @@ def _parse_article(dt_element, dd_element) -> Optional[Dict[str, Any]]:
     try:
         article = {}
         
-        # Extract from dt element (links)
         abstract_link = dt_element.find('a', {'title': 'Abstract'})
         if abstract_link:
             href = abstract_link.get('href', '')
-            # Extract arXiv ID from href
             id_match = re.search(r'/abs/([^/]+)', href)
             if id_match:
                 arxiv_id = id_match.group(1)
@@ -118,7 +110,6 @@ def _parse_article(dt_element, dd_element) -> Optional[Dict[str, Any]]:
         if html_link:
             article['html_url'] = f"https://arxiv.org{html_link.get('href', '')}"
         
-        # Extract from dd element (metadata)
         title_div = dd_element.find('div', {'class': 'list-title'})
         if title_div:
             title = title_div.get_text(strip=True)
@@ -138,7 +129,6 @@ def _parse_article(dt_element, dd_element) -> Optional[Dict[str, Any]]:
             subjects = subjects_div.get_text(strip=True)
             article['subjects'] = re.sub(r'^Subjects:\s*', '', subjects, flags=re.IGNORECASE)
             
-            # Extract primary subject
             primary_span = subjects_div.find('span', {'class': 'primary-subject'})
             if primary_span:
                 article['primary_subject'] = primary_span.get_text(strip=True)
@@ -153,7 +143,6 @@ def _parse_article(dt_element, dd_element) -> Optional[Dict[str, Any]]:
             journal_ref = journal_ref_div.get_text(strip=True)
             article['journal_ref'] = re.sub(r'^Journal-ref:\s*', '', journal_ref, flags=re.IGNORECASE)
         
-        # Ensure all expected fields exist
         article.setdefault('title', None)
         article.setdefault('subjects', None)
         article.setdefault('primary_subject', None)
@@ -163,7 +152,6 @@ def _parse_article(dt_element, dd_element) -> Optional[Dict[str, Any]]:
         article.setdefault('pdf_url', None)
         article.setdefault('html_url', None)
         
-        # Only return if we have essential fields
         if article.get('arxiv_id') and article.get('title'):
             return article
         else:
@@ -186,19 +174,17 @@ class ArxivFetcher:
             timeout=30.0,
             limits=httpx.Limits(max_keepalive_connections=10, max_connections=20)
         )
-        self.semaphore = asyncio.Semaphore(5)  # Limit concurrent requests
+        self.semaphore = asyncio.Semaphore(5)
     
     async def fetch_arxiv_papers(self, category: str, max_results: int = 20) -> List[Dict[str, Any]]:
         """Fetch papers from arXiv API for a specific category."""
         try:
-            # Use arXiv API to fetch papers by category
             api_url = f"http://export.arxiv.org/api/query?search_query=cat:{category}&start=0&max_results={max_results}&sortBy=lastUpdatedDate&sortOrder=descending"
             
             async with self.semaphore:
                 response = await self.client.get(api_url)
                 response.raise_for_status()
             
-            # Parse the XML response
             soup = BeautifulSoup(response.text, 'xml')
             entries = soup.find_all('entry')
             
@@ -220,24 +206,20 @@ class ArxivFetcher:
         try:
             article = {}
             
-            # Extract basic info
             title_elem = entry.find('title')
             if title_elem:
                 article['title'] = title_elem.get_text(strip=True)
             
-            # Extract URLs
             id_elem = entry.find('id')
             if id_elem:
                 article['url'] = id_elem.get_text(strip=True)
                 article['abstract_url'] = article['url']
                 
-                # Extract arxiv ID from URL
                 id_match = re.search(r'arxiv.org/abs/([^v]+)', article['url'])
                 if id_match:
                     arxiv_id = id_match.group(1)
                     article['pdf_url'] = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
             
-            # Extract authors
             authors = []
             for author in entry.find_all('author'):
                 name = author.find('name')
@@ -245,7 +227,6 @@ class ArxivFetcher:
                     authors.append(name.get_text(strip=True))
             article['authors'] = authors
             
-            # Extract categories/subjects
             categories = []
             primary_category = entry.find('arxiv:primary_category')
             if primary_category:
@@ -258,12 +239,10 @@ class ArxivFetcher:
                     categories.append(term)
             article['categories'] = categories
             
-            # Extract summary/abstract
             summary_elem = entry.find('summary')
             if summary_elem:
                 article['abstract'] = summary_elem.get_text(strip=True)
             
-            # Only return if we have essential fields
             if article.get('title') and article.get('url'):
                 return article
             return None
@@ -279,10 +258,8 @@ class ArxivFetcher:
                 response = await self.client.get(url, timeout=10.0)
                 response.raise_for_status()
             
-            # Parse HTML and extract content
             soup = BeautifulSoup(response.text, 'lxml')
             
-            # Try to find the main content area
             content_areas = [
                 soup.find('div', {'class': 'abstract'}),
                 soup.find('blockquote', {'class': 'abstract'}),
@@ -294,19 +271,15 @@ class ArxivFetcher:
             
             for area in content_areas:
                 if area:
-                    # Extract text and clean it up
                     text = area.get_text(separator='\n', strip=True)
-                    # Limit content length
                     if len(text) > 8000:
                         text = text[:8000] + "..."
                     return text
             
-            # Fallback: extract body text
             if soup.body:
                 text = soup.body.get_text(separator='\n', strip=True)
-                # Clean up and limit
                 lines = [line.strip() for line in text.split('\n') if line.strip()]
-                text = '\n'.join(lines[:100])  # First 100 non-empty lines
+                text = '\n'.join(lines[:100])
                 return text[:8000] if len(text) > 8000 else text
             
             return "No content could be extracted from the page."

@@ -4,9 +4,6 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 from typing import Any, List, Dict, Optional
 from enum import Enum
 
-# =============================
-#     TASK STATUS MODELS
-# =============================
 
 class TaskStatus(Enum):
     PENDING = "pending"
@@ -20,9 +17,6 @@ class DigestStatus(BaseModel):
     result: Optional[str] = None
     articles: Optional[List['ArticleAnalysis']] = None
 
-# =============================
-#     DATA MODELS (Moved from agent.py)
-# =============================
 
 class RankedArticle(BaseModel):
     """Pydantic model for a single ranked article."""
@@ -31,16 +25,15 @@ class RankedArticle(BaseModel):
     subject: str = Field(..., description="The primary subject category (e.g., cs.AI, physics.hep-th).")
     score_reason: str = Field(..., description="A brief explanation for the assigned relevance score based on the user's profile.")
     relevance_score: int = Field(..., ge=0, le=100, description="Score from 0 to 100 indicating relevance to the user profile. Higher means more relevant.")
-    abstract_url: HttpUrl = Field(..., description="The URL link to the article's abstract page on ArXiv.") # Changed to HttpUrl for validation
-    html_url: Optional[HttpUrl] = Field(None, description="Optional URL link to an HTML version of the article, if available.") # Changed to HttpUrl, optional
-    pdf_url: HttpUrl = Field(..., description="The URL link to the article's PDF version on ArXiv.") # Changed to HttpUrl
+    abstract_url: HttpUrl = Field(..., description="The URL link to the article's abstract page on ArXiv.")
+    html_url: Optional[HttpUrl] = Field(None, description="Optional URL link to an HTML version of the article, if available.")
+    pdf_url: HttpUrl = Field(..., description="The URL link to the article's PDF version on ArXiv.")
 
     @field_validator("authors", mode="before")
     @classmethod
     def ensure_authors_list(cls, v):
         """Ensure authors is always a List[str], even if malformed input."""
         if isinstance(v, list):
-            # Ensure all elements are strings, provide default if empty
             authors = [str(a) for a in v if a]
             return authors if authors else ["Unknown"]
         if isinstance(v, str):
@@ -51,20 +44,19 @@ class RankedArticle(BaseModel):
     @classmethod
     def normalize_url(cls, v):
         # Pydantic's HttpUrl will handle validation, just ensure it's not empty
-        return v if v else None # Return None if empty to allow Optional[HttpUrl]
+        return v if v else None
 
     @field_validator("title", mode="before")
     @classmethod
     def ensure_title(cls, v):
         return str(v) if v else "Untitled Article"
 
-    # Add arxiv_id extraction logic if needed centrally, maybe as a property or method
     @property
     def arxiv_id(self) -> str | None:
         import re
         if not self.abstract_url:
             return None
-        url_str = str(self.abstract_url) # Convert HttpUrl to string
+        url_str = str(self.abstract_url)
         for pattern in [
             r'/abs/([^/?&#\s]+)',
             r'/pdf/([^/?&#\s]+?)(?:\.pdf)?',
@@ -78,7 +70,6 @@ class RankedArticle(BaseModel):
 
 class ArticleAnalysis(BaseModel):
     """Analysis result for a single article."""
-    # Inherit fields from RankedArticle or redefine if structure differs significantly
     title: str = Field(..., description="The exact title of the analyzed ArXiv article.")
     authors: List[str] = Field(..., description="List of author names for the analyzed article.")
     subject: str = Field(..., description="The primary subject category of the analyzed article.")
@@ -99,37 +90,30 @@ class ArticleAnalysis(BaseModel):
     critical_notes: Optional[str] = Field(None, description="Limitations, concerns, or critical observations about the paper.")
     follow_up_suggestions: Optional[str] = Field(None, description="Related papers or next steps for the user to explore.")
 
-    # Optional: Add arxiv_id property if needed here too, or inherit/compose
     @property
     def arxiv_id(self) -> str | None:
         import re
         if not self.abstract_url:
             return None
         url_str = str(self.abstract_url)
-        # Simplified pattern assuming abstract_url is canonical
         m = re.search(r'/abs/([^/?&#\s]+)', url_str)
         return m.group(1) if m else None
 
 class UserContext(BaseModel):
     """User profile information (previously in agent.py)."""
     name: str
-    title: str # Or role/position
-    goals: str # Research interests or objectives
+    title: str
+    goals: str
 
-# =============================
-#     AGENT STATE MODEL (from Archon suggestion)
-# =============================
 
 class AgentStateModel(BaseModel):
     """Model for agent state persistence (structure based on Archon's suggestion)"""
-    last_processed_articles: Dict[str, RankedArticle] = Field(default_factory=dict) # Use arxiv_id as key?
-    user_preferences: Dict[str, UserContext] = Field(default_factory=dict) # Use user identifier as key?
-    session_data: Dict[str, Any] = Field(default_factory=dict) # Keep Any for flexible session data
+    last_processed_articles: Dict[str, RankedArticle] = Field(default_factory=dict)
+    user_preferences: Dict[str, UserContext] = Field(default_factory=dict)
+    session_data: Dict[str, Any] = Field(default_factory=dict)
 
-    # Consider adding methods for saving/loading if state logic resides here
-    # Or keep that logic separate in AgentState class in state.py 
+ 
 
-# New model for carrying scraped content alongside ranked data
 class ScrapedArticle(BaseModel):
     article: RankedArticle = Field(..., description="The ranked article metadata.")
     scraped_content: Optional[str] = Field(None, description="The scraped HTML or text content of the article.")

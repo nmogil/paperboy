@@ -8,7 +8,7 @@ set -e
 PROJECT_ID="${GCP_PROJECT_ID:-}"
 SERVICE_NAME="${SERVICE_NAME:-paperboy}"
 REGION="${REGION:-us-central1}"
-IMAGE_NAME="${IMAGE_NAME:-paperboy-lightweight}"
+IMAGE_NAME="${IMAGE_NAME:-paperboy}"
 MEMORY="${MEMORY:-512Mi}"  # Reduced from 1Gi - sufficient for lightweight version
 CPU="${CPU:-1}"
 MIN_INSTANCES="${MIN_INSTANCES:-0}"

@@ -21,15 +21,14 @@ steps:
       - '--image=us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/paperboy:latest'
       - '--region=us-central1'
       - '--platform=managed'
-      - '--memory=2Gi'  # Increased memory for better performance
-      - '--cpu=4'  # Increased CPU for faster processing
-      - '--cpu-boost'  # Enable CPU boost for faster cold starts
-      - '--min-instances=1'  # Keep 1 instance warm to avoid cold starts
-      - '--max-instances=100'  # Increased max instances for better scaling
+      - '--memory=512Mi'
+      - '--cpu=1'
+      - '--min-instances=0'
+      - '--max-instances=50'
       - '--concurrency=1'  # MUST be 1 due to in-memory state management
       - '--timeout=3600'
       - '--no-allow-unauthenticated'
-      - '--set-env-vars=USE_LIGHTWEIGHT=true,ANALYSIS_CONTENT_MAX_CHARS=20000,RANKING_INPUT_MAX_ARTICLES=20,TASK_TIMEOUT=1800,HTTP_TIMEOUT=120,OPENAI_TIMEOUT=100'  # Increased timeouts
+      - '--set-env-vars=USE_LIGHTWEIGHT=true,ANALYSIS_CONTENT_MAX_CHARS=8000,RANKING_INPUT_MAX_ARTICLES=20,TASK_TIMEOUT=300,HTTP_TIMEOUT=30'
       - '--set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest,API_KEY=API_KEY:latest,LOGFIRE_TOKEN=LOGFIRE_TOKEN:latest,OPENAI_MODEL=OPENAI_MODEL:latest,TOP_N_ARTICLES=TOP_N_ARTICLES:latest'
 
 # Optional: Configure timeout for the build

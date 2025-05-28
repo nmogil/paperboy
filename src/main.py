@@ -13,11 +13,9 @@ from .models import TaskStatus, DigestStatus
 from .security import validate_api_key
 from .config import settings
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configure Logfire
 LOGFIRE_TOKEN = settings.logfire_token
 if not LOGFIRE_TOKEN:
     logger.error("LOGFIRE_TOKEN is missing! Logs will NOT be sent to Logfire.")
@@ -28,27 +26,22 @@ else:
     except Exception as e:
         logger.exception(f"Failed to initialize logfire: {e}")
 
-# Simplified lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize services
     app.state.state_manager = TaskStateManager()
     app.state.digest_service = DigestService()
-    # Ensure digest service uses the same state manager
     app.state.digest_service.state_manager = app.state.state_manager
 
-    # Start cleanup task
     asyncio.create_task(cleanup_old_tasks(app))
 
     yield
 
-    # Cleanup
     await app.state.digest_service.fetcher.close()
 
 async def cleanup_old_tasks(app):
     """Background task to clean up old tasks."""
     while True:
-        await asyncio.sleep(3600)  # Run every hour
+        await asyncio.sleep(3600)
         try:
             await app.state.state_manager.cleanup_old_tasks(24)
         except Exception as e:
@@ -69,22 +62,19 @@ async def generate_digest(
     """Generate a personalized research digest."""
     task_id = str(uuid.uuid4())
 
-    # Create initial task
     await app.state.state_manager.create_task(
         task_id,
         DigestStatus(status=TaskStatus.PENDING, message="Task created")
     )
 
-    # Convert request to dict format expected by service
     user_info = {
         "name": request.user_info.name,
-        "research_interests": [request.user_info.goals],  # Convert goals to research_interests
+        "research_interests": [request.user_info.goals],
         "categories": getattr(request, 'categories', ['cs.AI', 'cs.LG']),
-        "affiliation": getattr(request.user_info, 'title', None),  # Map title to affiliation
+        "affiliation": getattr(request.user_info, 'title', None),
         "recent_focus": getattr(request.user_info, 'goals', None)
     }
 
-    # Queue background task
     background_tasks.add_task(
         app.state.digest_service.generate_digest,
         task_id,
@@ -108,7 +98,6 @@ async def get_digest_status(task_id: str) -> DigestStatusResponse:
     if not status:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # Convert articles to dict for API response
     articles_dict = None
     if status.articles:
         articles_dict = [article.model_dump() for article in status.articles]
@@ -131,7 +120,6 @@ async def health_check_alt():
     """Alternative health check endpoint."""
     return {"status": "healthy", "version": "2.0.0"}
 
-# Additional endpoints for compatibility
 @app.post("/generate_digest", response_model=GenerateDigestResponse, dependencies=[Depends(validate_api_key)])
 async def generate_digest_alt(
     request: GenerateDigestRequest,

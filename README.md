@@ -1,304 +1,437 @@
-# Article Ranking Agent
+# Paperboy
 
-A sophisticated AI agent that intelligently finds and ranks relevant academic papers based on user information and research interests. Built with modern Python practices, FastAPI, and robust error handling.
+An AI-powered academic paper recommendation system that ranks and analyzes arXiv papers based on user research profiles. It uses OpenAI models to provide personalized digests of relevant research papers with detailed analysis and reasoning.
 
 ## Project Structure
 
 ```
 paperboy/
-├── src/                    # Source code
-│   ├── agent.py           # Main agent logic
-│   ├── agent_tools.py     # Agent utility functions/tools
-│   ├── agent_prompts.py   # Agent prompts
-│   ├── config.py          # Configuration loading (Pydantic BaseSettings)
-│   ├── models.py          # Pydantic data models
-│   ├── api_models.py      # FastAPI request/response models
-│   ├── main.py           # FastAPI application entry point
-│   ├── security.py       # API security implementation
-│   ├── state.py          # State management (if used)
-│   └── __init__.py        # Package initialization
-├── tests/                 # Test files
-│   ├── test_agent.py
-│   ├── test_agent_tools.py
-│   ├── integration_test.py
-│   ├── test_state.json    # Example state data
-│   └── __init__.py
-├── config/               # Configuration files directory
-│   ├── .env             # Environment variables (loaded by src/config.py)
-│   └── .env.example     # Example environment variables
-├── data/                # Data files
-│   └── agent_state.json # Example agent state persistence
-├── notebooks/           # Jupyter notebooks (for experimentation)
-├── Dockerfile          # Lightweight Docker configuration (default)
-├── Dockerfile.full     # Full Docker configuration with Playwright
-├── docker-compose.yaml # Docker Compose configuration
-├── .dockerignore       # Docker ignore rules
-├── .gitignore          # Git ignore rules
-└── docs/               # Documentation files
+├── src/                          # Source code
+│   ├── agent.py                 # Core AI logic using Pydantic AI
+│   ├── agent_prompts.py         # Structured LLM prompts for JSON output
+│   ├── agent_tools_lightweight.py # Article content extraction (httpx-based)
+│   ├── api_models.py            # FastAPI request/response models
+│   ├── config.py                # Centralized configuration via Pydantic BaseSettings
+│   ├── fetcher_lightweight.py   # arXiv web scraping using httpx
+│   ├── main.py                  # FastAPI application with background tasks
+│   ├── models.py                # Pydantic models for type safety
+│   ├── security.py              # API key authentication middleware
+│   └── state.py                 # JSON-based state persistence
+├── config/                      # Configuration files
+│   ├── settings.py             # Additional configuration settings
+│   └── .env                    # Environment variables (create from .env.example)
+├── data/                       # Data persistence
+│   ├── agent_state.json        # Agent state storage
+│   ├── test_state.json         # Test data
+│   └── arxiv_cs_submissions_2025-04-01.json # Sample arXiv data
+├── archived_full_implementation/ # Archived Playwright-based implementation
+├── Dockerfile                  # Production Docker configuration
+├── docker-compose.lightweight.yaml # Lightweight Docker Compose
+├── requirements.lightweight.txt # Lightweight dependencies (httpx)
+├── deploy_cloudrun.sh          # Google Cloud Run deployment script
+├── cloudbuild.yaml             # Google Cloud Build configuration
+└── CLAUDE.md                   # AI assistant instructions
 ```
 
 ## Features
 
-- **Smart Article Recommendations**
+### 🧠 AI-Powered Analysis
+- **Intelligent Ranking**: Uses OpenAI models (GPT-4 by default) to rank papers by relevance to user research profile
+- **Detailed Analysis**: Provides in-depth analysis of top papers with reasoning and key insights
+- **Personalized Recommendations**: Tailors suggestions based on user's research goals and academic background
+- **HTML Digest Generation**: Creates formatted research digests with structured analysis
 
-  - Personalized article suggestions based on user profile and research interests
-  - Advanced relevance scoring with detailed reasoning
-  - Support for large article datasets with automatic truncation
+### 🚀 Production-Ready API
+- **Asynchronous Processing**: Background task execution for long-running digest generation
+- **RESTful Endpoints**: Clean API design with status tracking and health checks
+- **API Authentication**: Secure access via API key middleware
+- **Webhook Support**: Optional callback URLs for task completion notifications
+- **Auto-Documentation**: Swagger UI and ReDoc available at `/docs` and `/redoc`
 
-- **FastAPI Integration**
+### 🐳 Cloud-Native Deployment
+- **Docker Support**: Lightweight containers with security best practices
+- **Google Cloud Run**: One-click deployment with included configuration
+- **Auto-Scaling**: Handles variable workloads efficiently
+- **Health Monitoring**: Built-in health checks and optional Logfire integration
+- **Resource Limits**: Optimized for cloud environments with proper resource constraints
 
-  - RESTful API endpoints for digest generation and status checking
-  - Asynchronous processing with background tasks
-  - API key authentication for secure access
-  - Callback URL support for status updates
-  - Swagger/OpenAPI documentation at `/docs`
+### 📊 Data Pipeline
+- **arXiv Integration**: Automated fetching and parsing of academic papers
+- **Web Scraping**: Robust content extraction using httpx (lightweight) or Playwright (full)
+- **Content Processing**: Intelligent truncation and formatting for LLM analysis
+- **State Persistence**: JSON-based storage for task tracking and results
 
-- **Docker Support**
+### 🛠 Developer Experience
+- **Type Safety**: Comprehensive Pydantic models throughout the codebase
+- **Modern Python**: Async/await patterns, dependency injection, and clean architecture
+- **Easy Configuration**: Environment-based settings with sensible defaults
+- **Testing**: Mocked LLM calls for reliable testing
+- **Documentation**: Detailed setup instructions and API documentation
 
-  - Multi-stage build for optimized image size
-  - Development and production configurations
-  - Easy deployment with Docker Compose
-  - Health check endpoints
-  - Automatic environment isolation
+## Quick Start
 
-- **Robust Architecture**
+### Prerequisites
+- Docker and Docker Compose
+- OpenAI API key
+- (Optional) Google Cloud account for deployment
 
-  - Modular design with clear separation of concerns (`agent`, `tools`, `config`, `models`)
-  - Centralized, type-safe configuration via Pydantic `BaseSettings`
-  - Comprehensive error handling and logging
-  - State management for persistent agent memory
-  - Configurable model selection and parameters via environment variables
+### 1. Clone and Setup
 
-- **Developer-Friendly**
-  - Type hints and Pydantic models for better code quality and validation
-  - Extensive test coverage
-  - Clear documentation and implementation notes
-  - Easy configuration through a `.env` file
-  - Hot-reload support in development
+```bash
+git clone https://github.com/your-username/paperboy.git
+cd paperboy
+```
 
-## Installation
+### 2. Configure Environment
 
-### Using Docker (Recommended)
+Create your environment file:
+```bash
+# Copy the example configuration
+cp config/.env.example config/.env
 
-1. Clone this repository:
+# Edit with your settings (required: OPENAI_API_KEY, API_KEY)
+nano config/.env
+```
 
-   ```bash
-   git clone <repository-url>
-   cd paperboy
-   ```
+Required environment variables:
+```env
+OPENAI_API_KEY=your_openai_api_key_here
+API_KEY=your_secure_api_key_for_authentication
+```
 
-2. Set up environment variables:
+### 3. Run with Docker
 
-   ```bash
-   cp config/.env.example config/.env
-   # Edit config/.env with your settings
-   ```
+```bash
+# Start the service
+docker-compose up --build
 
-3. Build and run with Docker Compose:
+# Or run in background
+docker-compose -f docker-compose.lightweight.yaml up -d --build
+```
 
-   ```bash
-   docker-compose up --build
-   ```
+### 4. Access the API
 
-   The API will be available at:
+- **API Endpoints**: http://localhost:8000
+- **Interactive Docs**: http://localhost:8000/docs  
+- **Alternative Docs**: http://localhost:8000/redoc
+- **Health Check**: http://localhost:8000/digest-status/health
 
-   - API Endpoints: http://localhost:8000
-   - API Documentation: http://localhost:8000/docs
-   - Alternative Documentation: http://localhost:8000/redoc
+### Local Development (Alternative)
 
-### Manual Installation (Not Recommended)
+If you prefer running without Docker:
 
-Only use this method if you cannot use Docker for some reason. Docker is the recommended way to run this application as it ensures consistent environments and includes all necessary dependencies.
+```bash
+# Install dependencies
+pip install -r requirements.lightweight.txt
 
-1. Clone this repository:
-
-   ```bash
-   git clone <repository-url>
-   cd paperboy
-   ```
-
-2. Install dependencies:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. Set up environment variables:
-   ```bash
-   cp config/.env.example config/.env
-   # Edit config/.env with your settings
-   ```
+# Run the server
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+```
 
 ## Configuration
 
-Configuration is managed centrally via Pydantic `BaseSettings` in `src/config.py` and loaded from environment variables defined in `config/.env`.
+All configuration is managed via environment variables in `config/.env`. The system uses Pydantic BaseSettings for type-safe configuration loading.
 
-### Environment Variables (`config/.env`)
+### Core Environment Variables
 
-| Variable                     | Description                                         | Default (`src/config.py`) |
-| ---------------------------- | --------------------------------------------------- | ------------------------- |
-| `OPENAI_API_KEY`             | OpenAI API key                                      | **Required**              |
-| `OPENAI_MODEL`               | OpenAI Model ID                                     | `gpt-4o`                  |
-| `ARXIV_FILE`                 | Article data filename (in `data/`) or absolute path | `arxiv_papers.json`       |
-| `TOP_N_ARTICLES`             | Number of articles to rank/analyze                  | `5`                       |
-| `LOG_LEVEL`                  | Logging level (DEBUG, INFO, etc.)                   | `INFO`                    |
-| `CRAWLER_TIMEOUT`            | Web crawler page timeout (ms)                       | `25000`                   |
-| `AGENT_RETRIES`              | Pydantic AI agent retry attempts                    | `2`                       |
-| `ANALYSIS_CONTENT_MAX_CHARS` | Max characters of article content sent for analysis | `8000`                    |
-| `RANKING_INPUT_MAX_ARTICLES` | Max number of raw articles sent to LLM for ranking  | `20`                      |
-| `API_KEY`                    | Secret key for API authentication                   | **Required**              |
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `OPENAI_API_KEY` | OpenAI API access token | - | ✅ |
+| `API_KEY` | Authentication key for API endpoints | - | ✅ |
+| `OPENAI_MODEL` | OpenAI model to use | `gpt-4o` | |
+| `TOP_N_ARTICLES` | Number of articles to analyze | `5` | |
+| `LOG_LEVEL` | Logging verbosity | `INFO` | |
 
-## Usage
+### Performance & Limits
 
-### API Endpoints
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CRAWLER_TIMEOUT` | Web scraping timeout (ms) | `25000` |
+| `HTTP_TIMEOUT` | HTTP request timeout (seconds) | `30` |
+| `TASK_TIMEOUT` | Max digest generation time (seconds) | `300` |
+| `AGENT_RETRIES` | LLM retry attempts | `2` |
+| `ANALYSIS_CONTENT_MAX_CHARS` | Max content per article for analysis | `8000` |
+| `RANKING_INPUT_MAX_ARTICLES` | Max articles sent to ranking LLM | `20` |
 
-The service exposes the following REST API endpoints:
+### Optional Features
 
-1. **Generate Digest** - `POST /generate-digest`
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `USE_LIGHTWEIGHT` | Use httpx instead of Playwright | `true` |
+| `LOGFIRE_TOKEN` | Monitoring service token | - |
 
-   ```bash
-   curl -X POST http://localhost:8000/generate-digest \
-     -H "X-API-Key: your_api_key" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "user_info": {
-         "name": "John Doe",
-         "title": "AI Researcher",
-         "goals": "Looking for papers on LLMs and transformers"
-       },
-       "target_date": "2024-03-20",
-       "top_n_articles": 5,
-       "callback_url": "http://your-callback-url.com/webhook"
-     }'
-   ```
+## API Usage
 
-2. **Check Digest Status** - `GET /digest-status/{task_id}`
+### Authentication
 
-   ```bash
-   curl http://localhost:8000/digest-status/{task_id} \
-     -H "X-API-Key: your_api_key"
-   ```
+All API endpoints (except health check) require authentication via the `X-API-Key` header:
 
-3. **Health Check** - `GET /digest-status/health`
-   ```bash
-   curl http://localhost:8000/digest-status/health
-   ```
+```bash
+curl -H "X-API-Key: your_api_key_from_env" http://localhost:8000/endpoint
+```
 
-For full API documentation, visit:
+### Core Workflow
 
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+1. **Submit a digest request** → Get task ID immediately
+2. **Poll for status** → Track progress and get results  
+3. **Optional webhooks** → Receive notifications when complete
+
+### Generate Research Digest
+
+**POST** `/generate-digest`
+
+Creates a personalized research digest based on user profile and preferences.
+
+```bash
+curl -X POST http://localhost:8000/generate-digest \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_info": {
+      "name": "Dr. Jane Smith",
+      "title": "Machine Learning Researcher", 
+      "goals": "Exploring latest developments in transformer architectures and efficient training methods"
+    },
+    "target_date": "2025-05-01",
+    "top_n_articles": 5,
+    "callback_url": "https://your-app.com/webhooks/digest-complete"
+  }'
+```
+
+**Response:**
+```json
+{
+  "task_id": "abc123",
+  "status": "pending",
+  "message": "Digest generation started"
+}
+```
+
+### Check Status
+
+**GET** `/digest-status/{task_id}`
+
+```bash
+curl http://localhost:8000/digest-status/abc123 \
+  -H "X-API-Key: your_api_key"
+```
+
+**Response (Completed):**
+```json
+{
+  "task_id": "abc123",
+  "status": "completed", 
+  "result": {
+    "digest_html": "<html>...</html>",
+    "articles_analyzed": 5,
+    "generation_time": "2024-03-20T10:30:00Z"
+  }
+}
+```
+
+### Health Check
+
+**GET** `/digest-status/health` (no authentication required)
+
+```bash
+curl http://localhost:8000/digest-status/health
+```
+
+### Interactive Documentation
+
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+## Deployment
+
+### Google Cloud Run (Recommended)
+
+Deploy to Google Cloud Run with the included script:
+
+```bash
+# Set your project ID
+export GOOGLE_CLOUD_PROJECT=your-project-id
+
+# Deploy (creates necessary resources)
+./deploy_cloudrun.sh
+
+# Or use Cloud Build for CI/CD
+gcloud builds submit
+```
+
+The deployment includes:
+- Automatic scaling (0-1000 instances)
+- Health checks and monitoring
+- Secure environment variable management
+- Production-optimized container
 
 ### Docker Commands
 
-- **Start the service:**
-
-  ```bash
-  docker-compose up
-  ```
-
-- **Rebuild and start:**
-
-  ```bash
-  docker-compose up --build
-  ```
-
-- **Run in background:**
-
-  ```bash
-  docker-compose up -d
-  ```
-
-- **View logs:**
-
-  ```bash
-  docker-compose logs -f
-  ```
-
-- **Stop the service:**
-
-  ```bash
-  docker-compose down
-  ```
-
-- **Clean up unused resources:**
-  ```bash
-  docker-compose down --volumes --remove-orphans
-  docker system prune
-  ```
-
-### Development Mode
-
-For development with hot-reload:
-
 ```bash
-docker-compose up --build
+# Development
+docker-compose up --build              # Start with rebuild
+docker-compose up -d                   # Run in background
+docker-compose logs -f                 # View logs
+
+# Production
+docker build -t paperboy:latest .      # Build production image
+docker run -p 8000:8000 --env-file config/.env paperboy:latest
+
+# Maintenance
+docker-compose down --volumes --remove-orphans  # Clean shutdown
+docker system prune                             # Clean up resources
 ```
 
-The service will automatically reload when you make changes to the code.
+### Environment Variables for Production
+
+For production deployments, ensure these variables are properly set:
+
+```bash
+# Required
+OPENAI_API_KEY=sk-...
+API_KEY=your-secure-random-key
+
+# Recommended production settings
+OPENAI_MODEL=gpt-4o
+LOG_LEVEL=INFO
+TASK_TIMEOUT=300
+USE_LIGHTWEIGHT=true
+
+# Optional monitoring
+LOGFIRE_TOKEN=your-logfire-token
+```
 
 ## Development
 
-### Adding New Features
+### Testing
 
-1. Create feature branch:
+```bash
+# Run all tests
+pytest
 
-   ```bash
-   git checkout -b feature/your-feature
-   ```
+# Run with coverage
+pytest --cov=src
 
-2. Implement changes (e.g., add new tools in `src/agent_tools.py`, update models in `src/models.py`).
-3. If adding configuration, update `src/config.py` and `config/.env.example`.
-4. Add tests in `tests/`.
-5. Update `README.md` if necessary.
-6. Submit pull request.
+# Run specific test
+pytest tests/test_agent.py::test_rank_articles
+
+# Integration test
+pytest tests/integration_test.py
+```
+
+### Architecture
+
+The system follows a modular design:
+
+- **`main.py`**: FastAPI app with background task handling
+- **`agent.py`**: Core AI logic using Pydantic AI for ranking/analysis  
+- **`fetcher_lightweight.py`**: arXiv paper fetching with httpx
+- **`agent_tools_lightweight.py`**: Content extraction and processing
+- **`models.py`**: Type-safe Pydantic models throughout
+- **`config.py`**: Centralized environment-based configuration
+- **`state.py`**: JSON-based persistence for task tracking
+
+### Key Patterns
+
+- **Async/Await**: All I/O operations are async for performance
+- **Type Safety**: Comprehensive Pydantic models for validation
+- **Dependency Injection**: Configuration via BaseSettings
+- **Background Tasks**: Long operations handled asynchronously
+- **Security**: API key middleware on all protected endpoints
+
+### Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes following the existing patterns
+4. Add tests for new functionality
+5. Update configuration in `src/config.py` if needed
+6. Submit a pull request
 
 ### Code Style
 
-- Follow PEP 8 guidelines.
-- Use type hints (`pydantic` heavily relies on them).
-- Document functions, classes, and Pydantic models clearly.
-- Keep functions focused and modular (Single Responsibility Principle).
+- **Type Hints**: Required for all functions and class methods
+- **Async/Await**: Use async patterns for I/O operations
+- **Pydantic Models**: Create models for all data structures
+- **Error Handling**: Comprehensive exception handling with logging
+- **Documentation**: Clear docstrings for public APIs
 
 ## Troubleshooting
 
-Common issues and solutions:
+### Common Issues
 
-1. **`ValidationError` on startup:**
+#### Startup Problems
+```bash
+# ValidationError on startup
+# ✅ Ensure config/.env exists with required variables
+cp config/.env.example config/.env
+nano config/.env  # Add OPENAI_API_KEY and API_KEY
 
-   - Ensure `config/.env` file exists and contains all required variables (like `OPENAI_API_KEY`).
-   - Check variable names in `config/.env` match the `validation_alias` in `src/config.py`.
-   - Verify API key validity.
+# ❌ Missing OpenAI API key
+export OPENAI_API_KEY=sk-your-key-here
+```
 
-2. **Docker Issues:**
+#### Docker Issues  
+```bash
+# Container won't start
+docker-compose logs -f                    # Check logs
 
-   - If the container fails to start, check logs: `docker-compose logs -f`
-   - For permission issues: `sudo chown -R $USER:$USER .`
-   - If port 8000 is in use: modify the port mapping in `docker-compose.yaml`
-   - For cleanup: `docker-compose down --volumes --remove-orphans && docker system prune`
+# Port conflicts
+# Edit docker-compose.yaml: "8001:8000"   # Use different port
 
-3. **API Authentication Errors:**
+# Permission issues (Linux)
+sudo chown -R $USER:$USER .
 
-   - Ensure the `X-API-Key` header matches the `API_KEY` in your `.env` file
-   - Check if the API key is properly set in your environment
-   - Verify the header name is exactly `X-API-Key` (case-sensitive)
+# Clean up
+docker-compose down --volumes --remove-orphans
+docker system prune
+```
 
-4. **Memory Issues / Context Limits:**
+#### API Authentication
+```bash
+# 401 Unauthorized
+# ✅ Verify X-API-Key header matches config/.env API_KEY
 
-   - The agent currently loads all articles specified by `ARXIV_FILE` into memory.
-   - The number of raw articles sent to the LLM for ranking is limited by `RANKING_INPUT_MAX_ARTICLES`.
-   - The amount of content from each article sent for analysis is limited by `ANALYSIS_CONTENT_MAX_CHARS`.
-   - If Docker container runs out of memory, adjust memory limits in `docker-compose.yaml`
+curl -H "X-API-Key: your_api_key" http://localhost:8000/digest-status/health
+```
 
-5. **Performance / Cost:**
-   - Consider using a less expensive model like `gpt-3.5-turbo` via `OPENAI_MODEL` in `config/.env`.
-   - Adjust `AGENT_RETRIES` if excessive retries are occurring.
-   - Use background processing for long-running tasks
-   - Implement caching if needed
+#### Performance Issues
+```bash
+# Out of memory or context limits
+# ✅ Adjust these in config/.env:
+RANKING_INPUT_MAX_ARTICLES=10        # Reduce articles sent to LLM
+ANALYSIS_CONTENT_MAX_CHARS=4000      # Reduce content per article
+OPENAI_MODEL=gpt-3.5-turbo          # Use cheaper model
+
+# Timeout issues
+TASK_TIMEOUT=600                     # Increase timeout
+HTTP_TIMEOUT=60                      # Increase HTTP timeout
+```
+
+#### Production Deployment
+```bash
+# Cloud Run deployment fails
+gcloud auth configure-docker
+gcloud config set project your-project-id
+
+# Environment variables not loading
+# ✅ Use Google Cloud Console to set env vars
+# Or update deploy_cloudrun.sh with proper --set-env-vars
+```
+
+### Getting Help
+
+- **Issues**: [GitHub Issues](https://github.com/your-username/paperboy/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/your-username/paperboy/discussions)
+- **Documentation**: See `/docs` endpoints or `CLAUDE.md`
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
-- OpenAI for API access
-- FastAPI and Pydantic maintainers
-- Docker and container ecosystem
-- Academic paper sources (e.g., ArXiv)
+- [OpenAI](https://openai.com/) for GPT API access
+- [FastAPI](https://fastapi.tiangolo.com/) for the excellent web framework
+- [Pydantic](https://pydantic.dev/) for data validation and settings
+- [arXiv](https://arxiv.org/) for providing open access to research papers

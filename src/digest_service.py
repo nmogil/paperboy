@@ -21,13 +21,11 @@ class DigestService:
     async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None) -> None:
         """Generate a complete digest for the user."""
         try:
-            # Update status to processing
             await self.state_manager.update_task(
                 task_id,
                 DigestStatus(status=TaskStatus.PROCESSING, message="Fetching papers...")
             )
 
-            # Step 1: Fetch papers
             logfire.info(f"Fetching papers for categories: {user_info.get('categories', [])}")
             articles = await self._fetch_papers(user_info.get('categories', ['cs.AI', 'cs.LG']), target_date)
 
@@ -35,15 +33,12 @@ class DigestService:
                 await self._complete_task(task_id, "No papers found", callback_url)
                 return
 
-            # Update status
             await self.state_manager.update_task(
                 task_id,
                 DigestStatus(status=TaskStatus.PROCESSING, message=f"Ranking {len(articles)} papers...")
             )
 
-            # Step 2: Rank papers
             logfire.info(f"Sample article for ranking: {articles[0] if articles else 'No articles'}")
-            # Use top_n_articles if provided, otherwise fall back to settings
             top_n = top_n_articles if top_n_articles is not None else settings.top_n_articles
             ranked_articles = await self._rank_papers(articles, user_info, top_n)
 
@@ -51,7 +46,6 @@ class DigestService:
                 await self._complete_task(task_id, "No relevant papers found", callback_url)
                 return
 
-            # Update status
             await self.state_manager.update_task(
                 task_id,
                 DigestStatus(
@@ -60,13 +54,10 @@ class DigestService:
                 )
             )
 
-            # Step 3: Analyze top papers
             analyzed_articles = await self._analyze_papers(ranked_articles, user_info)
 
-            # Step 4: Generate HTML digest
             digest_html = self._generate_html(analyzed_articles, user_info)
 
-            # Complete task
             await self._complete_task(task_id, digest_html, callback_url, analyzed_articles)
 
         except Exception as e:
@@ -76,7 +67,6 @@ class DigestService:
                 DigestStatus(status=TaskStatus.FAILED, message=str(e))
             )
             if callback_url:
-                # Send failure callback
                 await self._send_callback(callback_url, task_id, "failed", str(e))
 
     async def _fetch_papers(self, categories: List[str], target_date: str = None) -> List[Dict[str, Any]]:
@@ -84,25 +74,20 @@ class DigestService:
         from .fetcher_lightweight import fetch_arxiv_cs_submissions
         from datetime import datetime
         
-        # Use provided target_date or fall back to a default date
         if not target_date:
-            target_date = "2025-05-01"  # Default fallback date
+            target_date = "2025-05-01"
         
         try:
-            # Fetch from arXiv catchup page
             all_articles = await fetch_arxiv_cs_submissions(target_date)
             
             if not all_articles:
                 logfire.warning(f"No articles found for date {target_date}")
                 return []
             
-            # Map field names to match expected schema
             for article in all_articles:
-                # Map primary_subject to subject for compatibility
                 if 'primary_subject' in article and 'subject' not in article:
                     article['subject'] = article['primary_subject']
                 
-                # Ensure required fields have defaults
                 article.setdefault('subject', 'cs.AI')
                 article.setdefault('authors', ['Unknown'])
             
@@ -120,14 +105,12 @@ class DigestService:
         top_n: int = None
     ) -> List[RankedArticle]:
         """Rank papers based on user profile."""
-        # Limit to reasonable number for LLM context (like archived version)
         from .config import settings
         max_articles = getattr(settings, 'ranking_input_max_articles', 20)
         articles_subset = articles[:max_articles]
         
         logfire.info(f"Ranking {len(articles_subset)} articles (limited from {len(articles)} total)")
 
-        # Use provided top_n or fall back to settings
         top_n_articles = top_n if top_n is not None else settings.top_n_articles
         
         ranked = await self.llm_client.rank_articles(
@@ -145,7 +128,6 @@ class DigestService:
         user_info: Dict[str, Any]
     ) -> List[ArticleAnalysis]:
         """Analyze top papers in parallel with rate limiting."""
-        # Process in batches to avoid overwhelming the API
         batch_size = 3
         analyses = []
 
@@ -154,21 +136,17 @@ class DigestService:
             batch_tasks = []
 
             for article in batch:
-                # Fetch content and analyze
                 task = self._fetch_and_analyze_article(article, user_info)
                 batch_tasks.append(task)
 
-            # Wait for batch to complete
             batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
 
-            # Filter out failed analyses
             for result in batch_results:
                 if isinstance(result, ArticleAnalysis):
                     analyses.append(result)
                 else:
                     logfire.error(f"Analysis failed: {result}")
 
-            # Small delay between batches
             if i + batch_size < len(ranked_articles):
                 await asyncio.sleep(1)
 
@@ -182,13 +160,11 @@ class DigestService:
     ) -> ArticleAnalysis:
         """Fetch article content and analyze it."""
         try:
-            # Fetch content
             content = await self.fetcher.fetch_article_content(str(article.abstract_url))
 
             if not content:
                 raise ValueError("No content fetched")
 
-            # Prepare metadata
             metadata = {
                 'title': article.title,
                 'url': str(article.abstract_url),
@@ -203,7 +179,6 @@ class DigestService:
                 'score_reason': article.score_reason
             }
 
-            # Analyze
             return await self.llm_client.analyze_article(content, metadata, user_info)
 
         except Exception as e:

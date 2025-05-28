@@ -11,8 +11,8 @@ Paperboy is an AI-powered academic paper recommendation system that ranks and an
 ### Running the Service
 
 ```bash
-# Development with Docker Compose (Lightweight version)
-docker-compose -f docker-compose.lightweight.yaml up --build
+# Development with Docker Compose
+docker-compose up --build
 
 # Production deployment
 docker build -t paperboy:latest .

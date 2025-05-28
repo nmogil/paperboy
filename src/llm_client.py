@@ -37,11 +37,9 @@ class LLMClient:
                 ],
                 temperature=temperature,
                 max_tokens=max_tokens
-                # Removed response_format constraint to allow JSON arrays
             )
             content = response.choices[0].message.content
 
-            # Strip any markdown formatting if present
             if content.startswith("```json"):
                 content = content[7:]
             if content.endswith("```"):
@@ -146,13 +144,11 @@ Articles:
                 elif 'result' in data:
                     data = data['result']
             
-            # Ensure data is a list
             if not isinstance(data, list):
-                data_str = str(data)[:200].replace('{', '{{').replace('}', '}}')  # Escape braces for logfire
+                data_str = str(data)[:200].replace('{', '{{').replace('}', '}}')
                 logfire.error(f"Expected list but got {type(data).__name__}: {data_str}")
                 logfire.error(f"LLM failed to return exactly {top_n} articles as requested. This suggests a prompt/parsing issue.")
                 
-                # If it's a single dict, this indicates the LLM misunderstood the task
                 if isinstance(data, dict):
                     logfire.error(f"LLM returned single article instead of {top_n} articles. Wrapping in list as fallback.")
                     data = [data]
@@ -160,10 +156,8 @@ Articles:
                     logfire.error(f"LLM returned unexpected type: {type(data)}. Using empty list.")
                     data = []
 
-            # Merge LLM output with original article data
             merged_articles = self._merge_llm_and_original_articles(data, articles)
             
-            # Convert to RankedArticle objects
             ranked_articles = []
             for item in merged_articles[:top_n]:
                 try:
@@ -219,7 +213,6 @@ Article Content (first 8000 chars):
         try:
             data = json.loads(response)
             
-            # Create analysis data with all fields from LLM response
             analysis_data = {
                 **article_metadata,
                 'summary': data.get('summary', ''),
@@ -233,7 +226,6 @@ Article Content (first 8000 chars):
                 'follow_up_suggestions': data.get('follow_up_suggestions')
             }
             
-            # Ensure metadata fields are properly set
             analysis_data['title'] = article_metadata.get('title', analysis_data.get('title', 'Unknown'))
             analysis_data['authors'] = article_metadata.get('authors', analysis_data.get('authors', ['Unknown']))
             analysis_data['subject'] = article_metadata.get('subject', analysis_data.get('subject', 'cs.AI'))
@@ -246,7 +238,6 @@ Article Content (first 8000 chars):
             return ArticleAnalysis(**analysis_data)
         except (json.JSONDecodeError, ValueError) as e:
             logfire.error(f"Failed to parse analysis response: {e}")
-            # Return metadata with error analysis like archived version
             error_data = {
                 **article_metadata,
                 'summary': f"Analysis failed: {type(e).__name__} - {str(e)}",
@@ -262,7 +253,6 @@ Article Content (first 8000 chars):
             return ArticleAnalysis(**error_data)
         except Exception as e:
             logfire.error(f"Error during article analysis for '{article_metadata.get('title')}': {e}", exc_info=True)
-            # Return metadata with error analysis like archived version
             error_data = {
                 **article_metadata,
                 'summary': f"Analysis failed: {type(e).__name__} - {str(e)}",
@@ -281,14 +271,12 @@ Article Content (first 8000 chars):
         """Merge LLM ranking output with original article data."""
         logfire.info(f"Merging {len(llm_results)} LLM results with {len(original_articles)} original articles")
         
-        # Create lookup map from the original articles using abstract_url as key
         original_articles_map = {str(orig.get('abstract_url')): orig for orig in original_articles if orig.get('abstract_url')}
         
         filled_ranked_articles = []
-        processed_urls = set()  # To handle potential duplicates from LLM
+        processed_urls = set()
         
         for llm_article in llm_results:
-            # Use abstract_url to find the original data
             abstract_url = str(llm_article.get('abstract_url', ''))
             
             if abstract_url in processed_urls:
@@ -299,27 +287,21 @@ Article Content (first 8000 chars):
             original_data = original_articles_map.get(abstract_url)
             
             if original_data:
-                # Create a new dictionary merging original data with LLM output
-                # Start with original data, then overlay LLM fields
                 merged_data = original_data.copy()
                 
-                # Override with LLM ranking fields
                 merged_data.update({
                     'relevance_score': llm_article.get('score', llm_article.get('relevance_score', 0)),
                     'score_reason': llm_article.get('reasoning', llm_article.get('score_reason', '')),
                 })
                 
-                # Ensure required fields exist
                 merged_data.setdefault('title', llm_article.get('title', 'Unknown'))
                 merged_data.setdefault('authors', llm_article.get('authors', ['Unknown']))
                 merged_data.setdefault('subject', llm_article.get('subject', 'cs.AI'))
                 
                 filled_ranked_articles.append(merged_data)
             else:
-                # If original data not found, keep LLM version with defaults
                 logfire.warning(f"Could not find original data for ranked article: '{llm_article.get('title')}' ({abstract_url}). Using LLM output directly.")
                 
-                # Add default fields if missing
                 llm_article.setdefault('relevance_score', llm_article.get('score', 0))
                 llm_article.setdefault('score_reason', llm_article.get('reasoning', ''))
                 llm_article.setdefault('authors', ['Unknown'])

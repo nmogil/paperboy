@@ -2,11 +2,11 @@ version: '3.8'
 
 services:
   api:
-    image: paperboy:lightweight
+    image: paperboy:latest
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: paperboy-api-lightweight
+    container_name: paperboy-api
     ports:
       - "127.0.0.1:8000:8080"  # Map local 8000 to container 8080
     env_file:
@@ -32,7 +32,7 @@ services:
       - /run
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/diagnostics/logfire-health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/digest-status/health"]
       interval: 30s
       timeout: 10s
       retries: 3

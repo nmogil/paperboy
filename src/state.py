@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 from .models import DigestStatus
 import asyncio
 import logfire
@@ -29,6 +29,6 @@ class TaskStateManager:
 
     async def cleanup_old_tasks(self, max_age_hours: int = 24) -> int:
         """Remove tasks older than max_age_hours."""
-        # Implementation for cleanup job
-        # This would need task creation timestamps
-        pass
+        # TODO: Implement cleanup based on task creation timestamps
+        _ = max_age_hours
+        return 0
