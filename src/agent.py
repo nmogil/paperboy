@@ -55,10 +55,22 @@ class Deps:
 
 # --- Pydantic AI Agent Definition ---
 
-# Create the model instance first
+# Create the model instance first with timeout
+import httpx
+openai_timeout = httpx.Timeout(
+    timeout=float(os.getenv('OPENAI_TIMEOUT', '100')),  # Overall timeout
+    connect=10.0,  # Connection timeout
+    read=float(os.getenv('OPENAI_TIMEOUT', '100')),  # Read timeout
+    write=10.0,  # Write timeout
+    pool=10.0  # Pool timeout
+)
+
 llm_model = OpenAIModel(
     settings.openai_model, # Use settings
-    provider=OpenAIProvider(api_key=settings.openai_api_key) # Use settings
+    provider=OpenAIProvider(
+        api_key=settings.openai_api_key,
+        http_client=httpx.AsyncClient(timeout=openai_timeout)
+    ) # Use settings with timeout
 )
 
 arxiv_agent = Agent(

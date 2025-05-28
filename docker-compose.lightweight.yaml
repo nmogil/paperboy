@@ -14,9 +14,9 @@ services:
     environment:
       - PORT=8080
       - USE_LIGHTWEIGHT=true  # Ensure lightweight mode
-      - LOG_LEVEL=INFO
-      - UVICORN_ACCESS_LOG=1
-      - UVICORN_LOG_LEVEL=info
+      - LOG_LEVEL=WARNING
+      - UVICORN_ACCESS_LOG=0
+      - UVICORN_LOG_LEVEL=warning
     volumes:
       - ./config/.env:/app/config/.env:ro  # Mount .env file as read-only
       - ./data:/app/data  # Mount data directory for state persistence

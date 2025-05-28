@@ -1,0 +1,67 @@
+graph TB
+    subgraph "API Layer"
+        API[FastAPI App<br/>main.py]
+        Auth[Security Middleware<br/>security.py]
+    end
+    
+    subgraph "Agent System"
+        Agent[AI Agent<br/>agent.py]
+        Prompts[Agent Prompts<br/>agent_prompts.py]
+        Tools[Agent Tools<br/>agent_tools_lightweight.py]
+    end
+    
+    subgraph "Data Layer"
+        Fetcher[arXiv Fetcher<br/>fetcher_lightweight.py]
+        Models[Data Models<br/>models.py]
+        State[State Manager<br/>state.py]
+    end
+    
+    subgraph "External Services"
+        ArXiv[arXiv API]
+        OpenAI[OpenAI GPT]
+    end
+    
+    subgraph "Storage"
+        JSON[(JSON State<br/>data/)]
+    end
+    
+    %% API Flow
+    Client([Client]) -->|POST /generate-digest| API
+    API --> Auth
+    Auth -->|Authenticate| API
+    API -->|Create Task| State
+    API -->|Background Task| Agent
+    
+    %% Agent Flow
+    Agent --> Prompts
+    Agent --> Tools
+    Agent -->|1. Fetch Papers| Fetcher
+    Fetcher -->|Query| ArXiv
+    
+    %% Processing Flow
+    Agent -->|2. Rank Papers| OpenAI
+    Agent -->|3. Analyze Content| Tools
+    Tools -->|Extract & Summarize| OpenAI
+    
+    %% Data Flow
+    Fetcher --> Models
+    Agent --> Models
+    State --> JSON
+    
+    %% Status Check
+    Client -->|GET /digest-status/id| API
+    API --> State
+    State -->|Retrieve| JSON
+    
+    %% Styling
+    classDef api fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef agent fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef data fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef external fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef storage fill:#f5f5f5,stroke:#424242,stroke-width:2px
+    
+    class API,Auth api
+    class Agent,Prompts,Tools agent
+    class Fetcher,Models,State data
+    class ArXiv,OpenAI external
+    class JSON storage

@@ -47,3 +47,6 @@ tests
 
 # Pipedream scripts (contain API keys)
 pipedream/
+
+google-cloud-storage/
+google-cloud-sdk/
