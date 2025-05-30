@@ -26,7 +26,7 @@ class DigestService:
                 DigestStatus(status=TaskStatus.PROCESSING, message="Fetching papers...")
             )
 
-            logfire.info(f"Fetching papers for categories: {user_info.get('categories', [])}")
+            logfire.info("Fetching papers for categories: {categories}", categories=user_info.get('categories', []))
             articles = await self._fetch_papers(user_info.get('categories', ['cs.AI', 'cs.LG']), target_date)
 
             if not articles:
@@ -39,7 +39,7 @@ class DigestService:
             )
 
             sample_article = str(articles[0])[:200] if articles else 'No articles'
-            logfire.info(f"Sample article for ranking: {sample_article}")
+            logfire.info("Sample article for ranking: {sample_article}", sample_article=sample_article)
             top_n = top_n_articles if top_n_articles is not None else settings.top_n_articles
             ranked_articles = await self._rank_papers(articles, user_info, top_n)
 
@@ -62,7 +62,7 @@ class DigestService:
             await self._complete_task(task_id, digest_html, callback_url, analyzed_articles)
 
         except Exception as e:
-            logfire.error(f"Digest generation failed: {str(e)}")
+            logfire.error("Digest generation failed: {error}", error=str(e))
             await self.state_manager.update_task(
                 task_id,
                 DigestStatus(status=TaskStatus.FAILED, message=str(e))
@@ -82,7 +82,7 @@ class DigestService:
             all_articles = await fetch_arxiv_cs_submissions(target_date)
             
             if not all_articles:
-                logfire.warn(f"No articles found for date {target_date}")
+                logfire.warn("No articles found for date {target_date}", target_date=target_date)
                 return []
             
             for article in all_articles:
@@ -92,11 +92,11 @@ class DigestService:
                 article.setdefault('subject', 'cs.AI')
                 article.setdefault('authors', ['Unknown'])
             
-            logfire.info(f"Fetched {len(all_articles)} articles from arXiv catchup page for {target_date}")
+            logfire.info("Fetched {count} articles from arXiv catchup page for {target_date}", count=len(all_articles), target_date=target_date)
             return all_articles
             
         except Exception as e:
-            logfire.error(f"Failed to fetch papers from catchup page: {e}")
+            logfire.error("Failed to fetch papers from catchup page: {error}", error=str(e))
             return []
 
     async def _rank_papers(
@@ -110,7 +110,7 @@ class DigestService:
         max_articles = getattr(settings, 'ranking_input_max_articles', 20)
         articles_subset = articles[:max_articles]
         
-        logfire.info(f"Ranking {len(articles_subset)} articles (limited from {len(articles)} total)")
+        logfire.info("Ranking {subset_count} articles (limited from {total_count} total)", subset_count=len(articles_subset), total_count=len(articles))
 
         top_n_articles = top_n if top_n is not None else settings.top_n_articles
         
@@ -120,7 +120,7 @@ class DigestService:
             top_n_articles
         )
 
-        logfire.info(f"LLM returned {len(ranked)} ranked articles")
+        logfire.info("LLM returned {count} ranked articles", count=len(ranked))
         return ranked
 
     async def _analyze_papers(
@@ -146,12 +146,12 @@ class DigestService:
                 if isinstance(result, ArticleAnalysis):
                     analyses.append(result)
                 else:
-                    logfire.error(f"Analysis failed: {result}")
+                    logfire.error("Analysis failed: {error}", error=str(result))
 
             if i + batch_size < len(ranked_articles):
                 await asyncio.sleep(1)
 
-        logfire.info(f"Successfully analyzed {len(analyses)} articles")
+        logfire.info("Successfully analyzed {count} articles", count=len(analyses))
         return analyses
 
     async def _fetch_and_analyze_article(
@@ -183,7 +183,7 @@ class DigestService:
             return await self.llm_client.analyze_article(content, metadata, user_info)
 
         except Exception as e:
-            logfire.error(f"Failed to analyze {article.title}: {e}")
+            logfire.error("Failed to analyze {title}: {error}", title=article.title, error=str(e))
             raise
 
     def _generate_html(
@@ -321,6 +321,6 @@ class DigestService:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(callback_url, json=payload)
                 response.raise_for_status()
-            logfire.info(f"Callback sent successfully to {callback_url}")
+            logfire.info("Callback sent successfully to {url}", url=callback_url)
         except Exception as e:
-            logfire.error(f"Failed to send callback: {e}")
+            logfire.error("Failed to send callback: {error}", error=str(e))
