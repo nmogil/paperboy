@@ -38,7 +38,8 @@ class DigestService:
                 DigestStatus(status=TaskStatus.PROCESSING, message=f"Ranking {len(articles)} papers...")
             )
 
-            logfire.info(f"Sample article for ranking: {articles[0] if articles else 'No articles'}")
+            sample_article = str(articles[0])[:200] if articles else 'No articles'
+            logfire.info(f"Sample article for ranking: {sample_article}")
             top_n = top_n_articles if top_n_articles is not None else settings.top_n_articles
             ranked_articles = await self._rank_papers(articles, user_info, top_n)
 
@@ -81,7 +82,7 @@ class DigestService:
             all_articles = await fetch_arxiv_cs_submissions(target_date)
             
             if not all_articles:
-                logfire.warning(f"No articles found for date {target_date}")
+                logfire.warn(f"No articles found for date {target_date}")
                 return []
             
             for article in all_articles:

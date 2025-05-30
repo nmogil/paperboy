@@ -127,7 +127,7 @@ Articles:
         try:
             data = json.loads(response)
             logfire.info(f"LLM response type: {type(data)}, keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
-            logfire.info(f"Raw LLM response (first 500 chars): {response[:500]}")
+            logfire.info(f"Raw LLM response (first 500 chars): {response[:500].replace('{', '{{').replace('}', '}}')}")
             
             # Ensure we have a list - try multiple possible keys
             if isinstance(data, dict):
@@ -280,7 +280,7 @@ Article Content (first 8000 chars):
             abstract_url = str(llm_article.get('abstract_url', ''))
             
             if abstract_url in processed_urls:
-                logfire.warning(f"Skipping duplicate article from LLM output: {llm_article.get('title')}")
+                logfire.warn(f"Skipping duplicate article from LLM output: {llm_article.get('title')}")
                 continue
             processed_urls.add(abstract_url)
             
@@ -300,7 +300,7 @@ Article Content (first 8000 chars):
                 
                 filled_ranked_articles.append(merged_data)
             else:
-                logfire.warning(f"Could not find original data for ranked article: '{llm_article.get('title')}' ({abstract_url}). Using LLM output directly.")
+                logfire.warn(f"Could not find original data for ranked article: '{llm_article.get('title')}' ({abstract_url}). Using LLM output directly.")
                 
                 llm_article.setdefault('relevance_score', llm_article.get('score', 0))
                 llm_article.setdefault('score_reason', llm_article.get('reasoning', ''))
