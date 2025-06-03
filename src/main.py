@@ -69,6 +69,9 @@ async def generate_digest(
 
     user_info = {
         "name": request.user_info.name,
+        "title": request.user_info.title,
+        "goals": request.user_info.goals,
+        "news_interest": getattr(request.user_info, 'news_interest', None),
         "research_interests": [request.user_info.goals],
         "categories": getattr(request, 'categories', ['cs.AI', 'cs.LG']),
         "affiliation": getattr(request.user_info, 'title', None),

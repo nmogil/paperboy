@@ -172,6 +172,129 @@ Articles:
             logfire.error(f"Failed to parse ranking response: {e}")
             raise ValueError(f"Invalid LLM response format: {e}")
 
+    async def rank_mixed_content(
+        self,
+        content: List[Dict[str, Any]],
+        user_info: Dict[str, Any],
+        top_n: int,
+        weight_recency: bool = True
+    ) -> List[RankedArticle]:
+        """Rank mixed content (papers and news) with type-aware scoring."""
+        system_prompt = f"""You are an expert analyst who ranks both research papers and news articles based on their relevance to a user's research interests and current work.
+
+Below is a list of content items in JSON format, which may include both academic papers and news articles. Select the {top_n} most relevant items based on the user profile.
+
+When ranking, consider:
+1. Research papers: Focus on technical relevance, methodological contributions, and potential applications
+2. News articles: Focus on industry relevance, emerging trends, company/technology mentions, and timely information
+3. {"Give slightly higher weight to recent news for timely insights" if weight_recency else "Weight all content equally regardless of publication date"}
+
+Your response MUST be a valid JSON array (starting with [ and ending with ]) containing EXACTLY {top_n} selected items. Each item object must include:
+- title: Title (string)
+- score: Relevance score 0-100 (integer) - use this field name!
+- reasoning: Brief explanation of relevance (string) - use this field name!
+- abstract_url: The item's URL (string)
+- authors: List of authors (array of strings)  
+- subject: Subject category or "news" (string)
+- html_url: HTML URL if available (string, optional)
+- pdf_url: PDF URL for papers (string, optional)
+- type: "paper" or "news" (string)
+- source: News source name for news articles (string, optional)
+- published_at: Publication timestamp for news (string, optional)
+
+Example format:
+[
+  {{
+    "title": "Research Paper Title",
+    "score": 85,
+    "reasoning": "This paper is relevant because...",
+    "abstract_url": "https://arxiv.org/abs/...",
+    "authors": ["Author 1", "Author 2"],
+    "subject": "cs.AI",
+    "html_url": "https://arxiv.org/html/...",
+    "pdf_url": "https://arxiv.org/pdf/...",
+    "type": "paper"
+  }},
+  {{
+    "title": "News Article Title",
+    "score": 78,
+    "reasoning": "This news is relevant because...",
+    "abstract_url": "https://news-url.com/article",
+    "authors": ["Reporter Name"],
+    "subject": "news",
+    "type": "news",
+    "source": "TechCrunch",
+    "published_at": "2024-01-15T10:30:00Z"
+  }}
+]
+
+Return ONLY the JSON array, no other text. 
+
+CRITICAL INSTRUCTIONS:
+1. You MUST select exactly {top_n} items (not 1, not 3, exactly {top_n})
+2. Return them as a JSON array starting with [ and ending with ]
+3. Mix papers and news based on relevance - don't artificially balance types
+4. Consider the user's role and interests when weighing paper vs news relevance
+5. For news, focus on business/industry impact and emerging trends
+6. If you return fewer than {top_n} items, you have failed the task
+
+Your response must start with [ and contain exactly {top_n} item objects."""
+
+        user_prompt = f"""User profile:
+Name: {user_info.get('name', 'Researcher')}
+Title: {user_info.get('title', 'Researcher')}
+Research Interests: {user_info.get('goals', ', '.join(user_info.get('research_interests', [])))}
+
+Content items:
+{json.dumps(content, indent=2)}"""
+
+        response = await self._call_llm(system_prompt, user_prompt, temperature=0.3)
+
+        try:
+            data = json.loads(response)
+            logfire.info(f"Mixed content ranking response type: {type(data)}")
+            
+            # Ensure we have a list
+            if isinstance(data, dict):
+                if 'articles' in data:
+                    data = data['articles']
+                elif 'results' in data:
+                    data = data['results']
+                elif 'ranked_content' in data:
+                    data = data['ranked_content']
+                elif 'items' in data:
+                    data = data['items']
+            
+            if not isinstance(data, list):
+                logfire.error(f"Expected list but got {type(data).__name__} for mixed content ranking")
+                if isinstance(data, dict):
+                    data = [data]
+                else:
+                    data = []
+
+            merged_content = self._merge_llm_and_original_articles(data, content)
+            
+            ranked_articles = []
+            for item in merged_content[:top_n]:
+                try:
+                    # Ensure proper type field
+                    if 'type' not in item:
+                        item['type'] = 'news' if item.get('subject') == 'news' else 'paper'
+                    
+                    ranked_articles.append(RankedArticle(**item))
+                except Exception as e:
+                    item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
+                    logfire.error(f"Failed to create RankedArticle from mixed content: {str(e)}, data: {item_str}")
+                    continue
+
+            logfire.info(f"Successfully ranked {len(ranked_articles)} mixed content items")
+            return ranked_articles
+            
+        except (json.JSONDecodeError, ValueError) as e:
+            logfire.error(f"Failed to parse mixed content ranking response: {e}")
+            # Fallback to regular ranking
+            return await self.rank_articles(content, user_info, top_n)
+
     async def analyze_article(
         self,
         article_content: str,

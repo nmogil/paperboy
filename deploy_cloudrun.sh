@@ -89,6 +89,15 @@ while IFS='=' read -r key value; do
     create_or_update_secret "$key" "$value"
 done < config/.env
 
+# Create NewsAPI and Tavily secrets if environment variables are set
+if [ ! -z "$NEWSAPI_KEY" ]; then
+    create_or_update_secret "NEWSAPI_KEY" "$NEWSAPI_KEY"
+fi
+
+if [ ! -z "$TAVILY_API_KEY" ]; then
+    create_or_update_secret "TAVILY_API_KEY" "$TAVILY_API_KEY"
+fi
+
 # Build the container image
 echo -e "${YELLOW}🏗️  Building container image...${NC}"
 gcloud builds submit \
