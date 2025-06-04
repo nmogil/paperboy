@@ -27,26 +27,42 @@ class QueryGenerator:
         if cache_key in self._query_cache:
             return self._query_cache[cache_key]
         
+        # SIMPLIFIED: Only use news_interest to query API once
+        news_interest = user_info.get('news_interest') or ''
+        news_interest = news_interest.strip() if news_interest else ''
+        
+        if news_interest:
+            # Single query based on user's selected interest
+            result = [news_interest]
+            self._query_cache[cache_key] = result
+            logfire.info("Generated single news query from interest", extra={"query": news_interest, "user": user_info.get('name')})
+            return result
+        
+        # Fallback if no news_interest provided
+        logfire.warning("No news_interest provided, returning empty queries", extra={"user": user_info.get('name')})
+        return []
+        
+        # COMMENTED OUT: Full query generation logic (kept for future use)
         # Extract direct queries
-        direct_queries = self._extract_direct_queries(user_info)
+        # direct_queries = self._extract_direct_queries(user_info)
         
         # Add temporal queries if recent
-        temporal_queries = self._generate_temporal_queries(user_info, target_date)
+        # temporal_queries = self._generate_temporal_queries(user_info, target_date)
         
         # Generate smart queries using LLM
-        remaining = max_queries - len(direct_queries) - len(temporal_queries)
-        llm_queries = []
-        if remaining > 0:
-            llm_queries = await self._generate_llm_queries(user_info, target_date, remaining)
+        # remaining = max_queries - len(direct_queries) - len(temporal_queries)
+        # llm_queries = []
+        # if remaining > 0:
+        #     llm_queries = await self._generate_llm_queries(user_info, target_date, remaining)
         
         # Combine and deduplicate
-        all_queries = list(dict.fromkeys(direct_queries + temporal_queries + llm_queries))
+        # all_queries = list(dict.fromkeys(direct_queries + temporal_queries + llm_queries))
         
-        result = all_queries[:max_queries]
-        self._query_cache[cache_key] = result
+        # result = all_queries[:max_queries]
+        # self._query_cache[cache_key] = result
         
-        logfire.info("Generated news queries", extra={"queries": result, "user": user_info.get('name')})
-        return result
+        # logfire.info("Generated news queries", extra={"queries": result, "user": user_info.get('name')})
+        # return result
     
     def _extract_direct_queries(self, user_info: Dict[str, Any]) -> List[str]:
         """Extract obvious queries from user info."""
