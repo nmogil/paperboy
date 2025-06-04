@@ -4,6 +4,7 @@ Enhanced DigestService with circuit breakers and caching.
 import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
+from collections import defaultdict
 import logfire
 import httpx
 import json
@@ -55,20 +56,156 @@ class EnhancedDigestService:
             except Exception as e:
                 logfire.error("Failed to initialize news components", extra={"error": str(e)})
 
-    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None) -> None:
+    def _generate_tldr_summary(self, articles: List[ArticleAnalysis], user_info: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Generate TL;DR bullet points for the executive summary."""
+        tldr_items = []
+
+        try:
+            # Separate papers and news for balanced representation
+            papers = [a for a in articles if a.type != ContentType.NEWS]
+            news = [a for a in articles if a.type == ContentType.NEWS]
+
+            # Take top items from each category
+            top_papers = sorted(papers, key=lambda x: x.relevance_score, reverse=True)[:3]
+            top_news = sorted(news, key=lambda x: x.relevance_score, reverse=True)[:2]
+
+            # Combine and sort by relevance
+            top_articles = sorted(top_papers + top_news, key=lambda x: x.relevance_score, reverse=True)
+
+            for article in top_articles:
+                # Extract the most important point based on type
+                if article.type == ContentType.NEWS:
+                    summary = f"<strong>{article.title}:</strong> {self._simplify_content(article.summary.split('.')[0], 100)}"
+                else:
+                    # For papers, use the first key finding
+                    if article.key_findings:
+                        summary = f"<strong>{self._simplify_content(article.title, 60)}:</strong> {article.key_findings[0]}"
+                    else:
+                        summary = f"<strong>{self._simplify_content(article.title, 60)}:</strong> {article.summary.split('.')[0]}"
+
+                tldr_items.append({
+                    'summary': summary,
+                    'relevance_score': article.relevance_score,
+                    'type': article.type.value if hasattr(article.type, 'value') else str(article.type)
+                })
+
+            return tldr_items
+        except Exception as e:
+            logfire.error(f"Error generating TL;DR summary: {e}")
+            # Return simple fallback
+            return [{
+                'summary': f"<strong>{articles[0].title if articles else 'No articles'}:</strong> Summary unavailable",
+                'relevance_score': 0,
+                'type': 'paper'
+            }]
+
+    def _calculate_total_reading_time(self, articles: List[ArticleAnalysis]) -> int:
+        """Calculate total reading time based on article types."""
+        try:
+            total_time = 0
+            for article in articles:
+                if article.type == ContentType.NEWS:
+                    total_time += 3  # 3 minutes for news
+                else:
+                    total_time += 5  # 5 minutes for papers
+            return max(1, total_time)  # At least 1 minute
+        except Exception as e:
+            logfire.error(f"Error calculating reading time: {e}")
+            return len(articles) * 4  # Default 4 minutes per article
+
+    def _categorize_articles_by_relevance(self, articles: List[ArticleAnalysis]) -> Dict[str, List[ArticleAnalysis]]:
+        """Categorize articles into relevance buckets."""
+        categories = {
+            'critical': [],     # 90-100 score
+            'important': [],    # 70-89 score
+            'interesting': [],  # 50-69 score
+            'quick_scan': []    # Below 50 or remaining items
+        }
+
+        try:
+            for article in articles:
+                score = article.relevance_score
+                if score >= 90:
+                    categories['critical'].append(article)
+                elif score >= 70:
+                    categories['important'].append(article)
+                elif score >= 50:
+                    categories['interesting'].append(article)
+                else:
+                    categories['quick_scan'].append(article)
+        except Exception as e:
+            logfire.error(f"Error categorizing articles: {e}")
+            # Return all articles as 'interesting' as fallback
+            categories['interesting'] = articles
+
+        return categories
+
+    def _simplify_content(self, text: str, max_length: int = 150) -> str:
+        """Simplify and truncate content for better readability."""
+        if not text:
+            return ""
+
+        try:
+            # Remove jargon and simplify
+            replacements = {
+                'This paper presents': 'Researchers found',
+                'The study demonstrates': 'The study shows',
+                'We propose': 'This introduces',
+                'methodology': 'method',
+                'utilization': 'use',
+                'furthermore': 'also',
+                'therefore': 'so',
+                'however': 'but',
+                'novel approach': 'new method',
+                'state-of-the-art': 'latest',
+                'empirical evidence': 'test results'
+            }
+
+            for old, new in replacements.items():
+                text = text.replace(old, new)
+                text = text.replace(old.lower(), new.lower())
+
+            # Truncate to max length at sentence boundary
+            if len(text) > max_length:
+                # Find the last period within max_length
+                truncate_point = text.rfind('.', 0, max_length)
+                if truncate_point > 0:
+                    text = text[:truncate_point + 1]
+                else:
+                    # No period found, truncate at word boundary
+                    truncate_point = text.rfind(' ', 0, max_length - 3)
+                    text = text[:truncate_point] + '...' if truncate_point > 0 else text[:max_length-3] + '...'
+
+            return text.strip()
+        except Exception as e:
+            logfire.error(f"Error simplifying content: {e}")
+            return text[:max_length] if len(text) > max_length else text
+
+    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None, digest_sources: Optional[Dict[str, bool]] = None) -> None:
         """Generate a complete digest for the user with circuit breaker protection."""
         try:
+            # Set default digest sources if not provided
+            if digest_sources is None:
+                digest_sources = {"arxiv": True, "news_api": settings.news_enabled}
+            
             await self.state_manager.update_task(
                 task_id,
-                DigestStatus(status=TaskStatus.PROCESSING, message="Fetching papers...")
+                DigestStatus(status=TaskStatus.PROCESSING, message="Fetching content...")
             )
 
-            # Fetch papers with circuit breaker
-            articles = await self._fetch_papers_with_breaker(user_info.get('categories', ['cs.AI', 'cs.LG']), target_date)
+            # Fetch papers if enabled
+            articles = []
+            if digest_sources.get("arxiv", True):
+                await self.state_manager.update_task(
+                    task_id,
+                    DigestStatus(status=TaskStatus.PROCESSING, message="Fetching papers...")
+                )
+                articles = await self._fetch_papers_with_breaker(user_info.get('categories', ['cs.AI', 'cs.LG']), target_date)
+                logfire.info("Fetched ArXiv articles", extra={"count": len(articles)})
 
             # Fetch news if enabled
             news_articles = []
-            if self.news_fetcher and self.content_extractor and self.query_generator:
+            if digest_sources.get("news_api", False) and self.news_fetcher and self.content_extractor and self.query_generator:
                 await self.state_manager.update_task(
                     task_id,
                     DigestStatus(status=TaskStatus.PROCESSING, message="Fetching relevant news...")
@@ -80,7 +217,8 @@ class EnhancedDigestService:
             all_content = articles + news_articles
 
             if not all_content:
-                await self._complete_task(task_id, "No papers or news found", callback_url)
+                sources_requested = [k for k, v in digest_sources.items() if v]
+                await self._complete_task(task_id, f"No content found for requested sources: {', '.join(sources_requested)}", callback_url)
                 return
 
             await self.state_manager.update_task(
@@ -93,14 +231,14 @@ class EnhancedDigestService:
             ranked_articles = await self._rank_content_with_breaker(all_content, user_info, top_n)
 
             if not ranked_articles:
-                await self._complete_task(task_id, "No relevant papers found", callback_url)
+                await self._complete_task(task_id, "No relevant content found", callback_url)
                 return
 
             await self.state_manager.update_task(
                 task_id,
                 DigestStatus(
                     status=TaskStatus.PROCESSING,
-                    message=f"Analyzing top {len(ranked_articles)} papers..."
+                    message=f"Analyzing top {len(ranked_articles)} items..."
                 )
             )
 
@@ -588,612 +726,525 @@ News Articles to rank:
             logfire.error("Failed to analyze {title}: {error}", title=article.title, error=str(e))
             raise
 
-    # Include the full _generate_html, _generate_papers_section, _generate_news_section methods
-    # These are exactly the same as in the original file
     def _generate_html(self, articles: List[ArticleAnalysis], user_info: Dict[str, Any]) -> str:
-        """Generate enhanced HTML digest with improved readability."""
-        papers = [a for a in articles if a.type != ContentType.NEWS]
-        news = [a for a in articles if a.type == ContentType.NEWS]
+        """Generate simplified, scannable HTML digest."""
+        try:
+            # Generate TL;DR summary
+            tldr_items = self._generate_tldr_summary(articles, user_info)
+
+            # Calculate stats
+            papers = [a for a in articles if a.type != ContentType.NEWS]
+            news = [a for a in articles if a.type == ContentType.NEWS]
+            total_reading_time = self._calculate_total_reading_time(articles)
+
+            # Categorize articles
+            categorized = self._categorize_articles_by_relevance(articles)
+
+            # Build HTML
+            html_parts = [self._generate_html_header(user_info, len(papers), len(news), total_reading_time)]
+
+            # Add TL;DR section
+            html_parts.append(self._generate_tldr_section(tldr_items, len(articles), total_reading_time))
+
+            # Add categorized content sections
+            if categorized['critical'] or categorized['important']:
+                html_parts.append(self._generate_priority_section(
+                    categorized['critical'] + categorized['important'],
+                    "🎯 Directly Relevant to Your Work"
+                ))
+
+            if categorized['interesting']:
+                html_parts.append(self._generate_priority_section(
+                    categorized['interesting'],
+                    "📚 Expand Your Knowledge"
+                ))
+
+            if categorized['quick_scan']:
+                html_parts.append(self._generate_quick_scan_section(categorized['quick_scan']))
+
+            html_parts.append(self._generate_html_footer(len(articles)))
+
+            return ''.join(html_parts)
+        except Exception as e:
+            logfire.error(f"Error generating HTML digest: {e}")
+            # Simple fallback if there are any issues
+            return self._generate_fallback_html(articles, user_info, str(e))
+
+    def _generate_fallback_html(self, articles: List[ArticleAnalysis], user_info: Dict[str, Any], error_msg: str) -> str:
+        """Generate a simple fallback HTML if the main generation fails."""
+        current_date = datetime.now().strftime("%B %d, %Y")
+        user_name = user_info.get('name', 'User')
         
-        html_parts = ["""
+        fallback_html = f"""
 <!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Research Digest - {date}</title>
+    <title>Your AI Digest - {current_date}</title>
     <style>
-        /* Base styles */
+        body {{ font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .error {{ color: #e74c3c; background: #ffeaa7; padding: 15px; border-radius: 8px; margin: 20px 0; }}
+        .article {{ background: #f8f9fa; padding: 20px; margin: 15px 0; border-radius: 8px; }}
+        h1 {{ color: #2c3e50; }}
+        h3 {{ color: #34495e; }}
+        a {{ color: #3498db; }}
+    </style>
+</head>
+<body>
+    <h1>Your AI Digest - {current_date}</h1>
+    <p>Hello {user_name},</p>
+    <div class="error">
+        <strong>Notice:</strong> There was an issue generating the full digest format. 
+        Here's a simplified version of your articles.
+    </div>
+    <div>
+        {"".join([f'<div class="article"><h3>{article.title}</h3><p>{article.summary}</p><a href="{article.abstract_url}">Read more</a></div>' for article in articles[:5]])}
+    </div>
+    <p><em>Technical details: {error_msg}</em></p>
+</body>
+</html>"""
+        return fallback_html
+
+    def _generate_html_header(self, user_info: Dict[str, Any], papers_count: int, news_count: int, total_time: int) -> str:
+        """Generate mobile-first HTML header with simplified styling."""
+        try:
+            current_date = datetime.now().strftime("%B %d, %Y")
+            user_name = user_info.get('name', 'User')
+            user_title = user_info.get('title', 'Researcher')
+
+            return f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your AI Digest - {current_date}</title>
+    <style>
+        /* Mobile-first CSS with 600px max-width */
         * {{ box-sizing: border-box; }}
-        body {{ 
+        body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 900px; 
-            margin: 0 auto; 
-            padding: 20px; 
-            line-height: 1.7; 
-            color: #2c3e50;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            color: #333;
             background: #f8f9fa;
         }}
-        
+
         /* Header */
-        .header {{ 
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-            color: white; 
-            padding: 40px 30px; 
-            border-radius: 16px; 
-            margin-bottom: 40px; 
+        .header {{
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
             text-align: center;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
         }}
-        .header h1 {{ 
-            margin: 0 0 15px 0; 
-            font-size: 2.5em; 
-            font-weight: 700;
+        .header h1 {{
+            margin: 0 0 10px 0;
+            font-size: 1.8em;
+            font-weight: 600;
         }}
         .header-meta {{
-            font-size: 1.1em;
-            opacity: 0.95;
+            font-size: 0.95em;
+            opacity: 0.9;
         }}
-        
-        /* Quick stats */
-        .quick-stats {{
+
+        /* Stats */
+        .stats {{
             display: flex;
             justify-content: center;
-            gap: 30px;
-            margin-top: 20px;
+            gap: 20px;
+            margin-top: 15px;
             flex-wrap: wrap;
         }}
         .stat-item {{
             background: rgba(255,255,255,0.2);
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 0.9em;
+            padding: 8px 12px;
+            border-radius: 16px;
+            font-size: 0.85em;
         }}
-        
+
+        /* TL;DR Section */
+        .tldr-section {{
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            border-left: 4px solid #3498db;
+        }}
+        .tldr-section h2 {{
+            margin: 0 0 15px 0;
+            color: #2c3e50;
+            font-size: 1.3em;
+        }}
+        .tldr-list {{
+            margin: 0;
+            padding-left: 20px;
+        }}
+        .tldr-list li {{
+            margin-bottom: 8px;
+            line-height: 1.5;
+        }}
+        .tldr-meta {{
+            margin-top: 15px;
+            font-size: 0.85em;
+            color: #7f8c8d;
+            text-align: center;
+        }}
+
         /* Content sections */
-        .content-section {{ 
-            margin-bottom: 50px; 
+        .content-section {{
+            margin-bottom: 40px;
         }}
         .section-header {{
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 30px;
-            padding-bottom: 15px;
-            border-bottom: 3px solid #3498db;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #3498db;
         }}
-        .section-header h2 {{ 
-            color: #2c3e50; 
-            font-size: 1.8em;
+        .section-header h2 {{
             margin: 0;
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            color: #2c3e50;
+            font-size: 1.4em;
         }}
         .section-count {{
             background: #ecf0f1;
             color: #7f8c8d;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.9em;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.8em;
         }}
-        
+
         /* Article cards */
-        .articles-grid, .news-grid {{ 
-            display: flex; 
-            flex-direction: column; 
-            gap: 25px; 
+        .articles-grid {{
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
         }}
-        .article {{ 
-            background: white; 
-            border: 1px solid #e1e8ed; 
-            border-radius: 16px;
-            padding: 30px; 
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08); 
-            transition: all 0.3s ease;
+        .article {{
+            background: white;
+            border: 1px solid #e1e8ed;
+            border-radius: 12px;
+            padding: 20px;
             position: relative;
-            overflow: hidden;
         }}
-        .article:hover {{ 
-            transform: translateY(-3px); 
-            box-shadow: 0 8px 24px rgba(0,0,0,0.12); 
-        }}
-        
-        /* Content type indicators */
-        .content-type-badge {{
+
+        /* Priority indicators */
+        .priority-indicator {{
             position: absolute;
             top: 15px;
             right: 15px;
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 0.75em;
+            padding: 4px 8px;
+            border-radius: 10px;
+            font-size: 0.7em;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
         }}
-        .paper-badge {{
-            background: #3498db;
-            color: white;
-        }}
-        .news-badge {{
+        .priority-indicator.high {{
             background: #e74c3c;
             color: white;
         }}
-        
-        /* Visual distinction */
-        .news-article {{ 
-            border-left: 5px solid #e74c3c; 
+        .priority-indicator.medium {{
+            background: #f39c12;
+            color: white;
         }}
-        .paper-article {{ 
-            border-left: 5px solid #3498db; 
-        }}
-        
-        /* Article header */
-        .article h3 {{ 
-            margin: 0 50px 20px 0; 
-            color: #2c3e50; 
-            font-size: 1.4em; 
+
+        /* Article content */
+        .article h3 {{
+            margin: 0 50px 15px 0;
+            color: #2c3e50;
+            font-size: 1.2em;
             line-height: 1.4;
-            font-weight: 600;
         }}
-        
-        /* Enhanced metadata */
-        .metadata {{ 
-            color: #7f8c8d; 
-            font-size: 0.9em; 
-            margin-bottom: 20px; 
-            display: flex; 
-            flex-wrap: wrap; 
-            gap: 12px;
-            align-items: center;
-        }}
-        .metadata-item {{
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }}
-        .score {{ 
-            background: #27ae60; 
-            color: white; 
-            padding: 5px 14px; 
-            border-radius: 20px;
-            font-size: 0.85em; 
-            font-weight: 600;
-        }}
-        .high-score {{ background: #27ae60; }}
-        .medium-score {{ background: #f39c12; }}
-        .low-score {{ background: #95a5a6; }}
-        .news-score {{ 
-            background: #e74c3c; 
-        }}
-        .source-tag {{ 
-            background: #ecf0f1; 
-            color: #7f8c8d; 
-            padding: 3px 10px; 
-            border-radius: 12px; 
-            font-size: 0.8em;
-        }}
-        .news-source {{ 
-            background: #ffeaa7; 
-            color: #d63031; 
-        }}
-        .reading-time {{
-            color: #95a5a6;
-            font-size: 0.85em;
-        }}
-        .freshness {{
-            color: #e74c3c;
-            font-size: 0.85em;
-            font-weight: 500;
-        }}
-        
-        /* Content sections */
-        .section {{ 
-            margin: 20px 0; 
-        }}
-        .section h4 {{ 
-            color: #34495e; 
-            font-size: 1.1em; 
-            margin-bottom: 10px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }}
-        
-        /* Key findings */
-        .key-findings {{ 
-            background: #f8f9fa; 
-            padding: 20px; 
-            border-radius: 12px; 
-            margin: 15px 0;
-            border: 1px solid #e1e8ed;
-        }}
-        .key-findings ul {{ 
-            margin: 0; 
-            padding-left: 25px; 
-        }}
-        .key-findings li {{ 
-            margin-bottom: 10px;
-            line-height: 1.6;
-        }}
-        
-        /* News summary */
-        .news-summary {{ 
-            background: #fff3cd; 
-            padding: 20px; 
-            border-radius: 12px; 
-            margin: 15px 0;
-            border: 1px solid #ffeaa7;
-        }}
-        
-        /* Expandable content */
-        .expandable {{
-            margin-top: 15px;
-        }}
-        .expand-toggle {{
-            color: #3498db;
-            cursor: pointer;
-            font-size: 0.9em;
-            font-weight: 500;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            user-select: none;
-        }}
-        .expand-toggle:hover {{
-            text-decoration: underline;
-        }}
-        .expandable-content {{
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #ecf0f1;
-        }}
-        
-        /* Action box */
-        .action-box {{ 
-            background: #d5f4e6; 
-            border: 2px solid #27ae60; 
-            border-radius: 12px; 
-            padding: 20px; 
-            margin-top: 20px;
-        }}
-        .action-box h4 {{
-            margin-top: 0;
-            color: #27ae60;
-        }}
-        .action-box strong {{ 
-            color: #27ae60; 
-        }}
-        
-        /* Links */
-        .article-links {{ 
-            margin-top: 20px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 15px;
-        }}
-        .article-links a {{ 
-            color: #3498db; 
-            text-decoration: none;
+        .one-liner {{
+            margin: 0 0 15px 0;
             font-size: 0.95em;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            padding: 8px 16px;
-            border: 1px solid #3498db;
-            border-radius: 8px;
-            transition: all 0.2s ease;
+            color: #555;
         }}
-        .article-links a:hover {{ 
+        .personal-relevance, .key-takeaway {{
+            margin: 15px 0;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            font-size: 0.9em;
+        }}
+        .personal-relevance strong, .key-takeaway strong {{
+            color: #3498db;
+        }}
+
+        /* Actions */
+        .actions {{
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }}
+        .primary-action, .secondary-action {{
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-size: 0.85em;
+            font-weight: 500;
+        }}
+        .primary-action {{
             background: #3498db;
             color: white;
         }}
-        
-        /* Images */
-        .news-image {{ 
-            width: 100%; 
-            max-width: 100%; 
-            height: auto; 
-            border-radius: 12px; 
-            margin: 20px 0;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        .secondary-action {{
+            background: #ecf0f1;
+            color: #7f8c8d;
         }}
-        
+
+        /* Quick scan */
+        .quick-scan {{
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }}
+        .quick-scan li {{
+            padding: 12px;
+            margin-bottom: 8px;
+            background: white;
+            border-radius: 8px;
+            font-size: 0.9em;
+        }}
+        .quick-scan a {{
+            color: #3498db;
+            text-decoration: none;
+            font-weight: 500;
+        }}
+
         /* Footer */
-        .footer {{ 
-            text-align: center; 
-            color: #95a5a6; 
-            font-size: 0.9em; 
-            margin-top: 60px; 
-            padding: 30px 20px; 
-            border-top: 2px solid #ecf0f1;
+        .footer {{
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 0.85em;
+            margin-top: 40px;
+            padding: 20px;
+            border-top: 1px solid #ecf0f1;
         }}
-        
-        /* Mobile responsiveness */
-        @media (max-width: 768px) {{
+        .footer .stats {{
+            color: #3498db;
+            font-weight: 600;
+        }}
+
+        /* Mobile breakpoints */
+        @media (max-width: 480px) {{
             body {{ padding: 15px; }}
-            .header {{ padding: 30px 20px; }}
-            .header h1 {{ font-size: 2em; }}
-            .quick-stats {{ gap: 15px; }}
-            .article {{ padding: 20px; }}
-            .article h3 {{ font-size: 1.2em; margin-right: 40px; }}
-            .metadata {{ font-size: 0.85em; }}
-            .content-type-badge {{ 
-                top: 10px; 
-                right: 10px;
-                font-size: 0.7em;
-            }}
-            .section-header {{ flex-direction: column; align-items: flex-start; gap: 10px; }}
-            .news-image {{ margin: 15px -20px; width: calc(100% + 40px); }}
+            .header {{ padding: 20px 15px; }}
+            .header h1 {{ font-size: 1.6em; }}
+            .stats {{ gap: 15px; }}
+            .article {{ padding: 15px; }}
+            .article h3 {{ margin-right: 40px; font-size: 1.1em; }}
+            .section-header {{ flex-direction: column; align-items: flex-start; gap: 8px; }}
         }}
-        
-        /* Print styles */
-        @media print {{
-            body {{ background: white; }}
-            .header {{ background: none; color: black; border: 2px solid black; }}
-            .article {{ box-shadow: none; border: 1px solid black; page-break-inside: avoid; }}
-            .expand-toggle {{ display: none; }}
-            .expandable-content {{ display: block !important; }}
-        }}
-        
-        /* Utility classes */
-        .hidden {{ display: none; }}
-        .mt-10 {{ margin-top: 10px; }}
-        .mt-20 {{ margin-top: 20px; }}
     </style>
-    <script>
-        function toggleExpand(id) {{
-            const content = document.getElementById(id);
-            const toggle = document.getElementById(id + '-toggle');
-            if (content.classList.contains('hidden')) {{
-                content.classList.remove('hidden');
-                toggle.innerHTML = '▼ Show less';
-            }} else {{
-                content.classList.add('hidden');
-                toggle.innerHTML = '▶ Show more';
-            }}
-        }}
-        
-        function calculateReadingTime(text) {{
-            const wordsPerMinute = 200;
-            const words = text.trim().split(/\s+/).length;
-            const minutes = Math.ceil(words / wordsPerMinute);
-            return minutes;
-        }}
-        
-        document.addEventListener('DOMContentLoaded', function() {{
-            document.querySelectorAll('.article').forEach((article, index) => {{
-                const text = article.innerText;
-                const time = calculateReadingTime(text);
-                const timeEl = article.querySelector('.reading-time');
-                if (timeEl) {{
-                    timeEl.innerHTML = `⏱ ${{time}} min read`;
-                }}
-            }});
-        }});
-    </script>
 </head>
 <body>
     <div class="header">
-        <h1>📚 Your Research Digest</h1>
+        <h1>🚀 Your AI Digest</h1>
         <div class="header-meta">
-            <p>Generated on {date} for <strong>{user_name}</strong></p>
-            <p><strong>Research Focus:</strong> {interests}</p>
+            <p>Hello <strong>{user_name}</strong> • {current_date}</p>
+            <p><em>{user_title}</em></p>
         </div>
-        <div class="quick-stats">
-            <span class="stat-item">📄 {paper_count} Papers</span>
-            <span class="stat-item">📰 {news_count} News Articles</span>
-            <span class="stat-item">⏱ ~{total_reading_time} min total</span>
+        <div class="stats">
+            <span class="stat-item">📄 {papers_count} Papers</span>
+            <span class="stat-item">📰 {news_count} News</span>
+            <span class="stat-item">⏱ {total_time}min read</span>
         </div>
     </div>
-""".format(
-            date=datetime.now().strftime("%B %d, %Y"),
-            user_name=user_info.get('name', 'Researcher'),
-            interests=', '.join(user_info.get('research_interests', user_info.get('categories', ['AI Research']))),
-            paper_count=len(papers),
-            news_count=len(news),
-            total_reading_time=(len(papers) * 5) + (len(news) * 3)
-        )]
+"""
+        except Exception as e:
+            logfire.error(f"Error generating HTML header: {e}")
+            # Simple fallback header
+            return f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your AI Digest</title>
+    <style>
+        body {{ font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: #3498db; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Your AI Digest</h1>
+        <p>Hello {user_info.get('name', 'User')}</p>
+    </div>
+"""
 
-        if papers:
-            html_parts.append(self._generate_papers_section(papers))
+    def _generate_tldr_section(self, tldr_items: List[Dict[str, str]], total_items: int, total_time: int) -> str:
+        """Generate the TL;DR executive summary section."""
+        if not tldr_items:
+            return ""
 
-        if news:
-            html_parts.append(self._generate_news_section(news))
+        try:
+            bullets = "\n".join([f"<li>{item['summary']}</li>" for item in tldr_items])
+            user_focus = self._get_user_focus_area()
 
-        html_parts.append("""
+            return f"""
+    <div class="tldr-section">
+        <h2>📌 Your 2-Minute Briefing</h2>
+        <ul class="tldr-list">
+            {bullets}
+        </ul>
+        <p class="tldr-meta">
+            {total_items} items • {total_time} min total read time •
+            Tailored for {user_focus}
+        </p>
+    </div>
+"""
+        except Exception as e:
+            logfire.error(f"Error generating TL;DR section: {e}")
+            return ""
+
+    def _generate_priority_section(self, articles: List[ArticleAnalysis], section_title: str) -> str:
+        """Generate a priority section with simplified article cards."""
+        if not articles:
+            return ""
+
+        try:
+            cards = []
+            for idx, article in enumerate(articles[:3]):  # Limit to 3 per section
+                priority = "high" if article.relevance_score >= 90 else "medium"
+                priority_text = "Must Read" if priority == "high" else "Important"
+
+                # Create one-liner summary
+                if article.type == ContentType.NEWS:
+                    one_liner = self._simplify_content(article.summary.split('.')[0], 100)
+                else:
+                    one_liner = self._simplify_content(article.importance.split('.')[0], 100)
+
+                # Simplify personal relevance
+                relevance = self._simplify_content(article.relevance_to_user, 150)
+
+                # Get primary action text
+                action_text = "Read 3-min summary" if article.type == ContentType.NEWS else "Get key insights"
+
+                # Extract key takeaway
+                if article.key_findings and len(article.key_findings) > 0:
+                    key_takeaway = self._simplify_content(article.key_findings[0], 120)
+                else:
+                    key_takeaway = self._simplify_content(article.recommended_action, 120)
+
+                # Ensure all URLs are strings
+                abstract_url = str(article.abstract_url) if article.abstract_url else "#"
+                pdf_url = str(article.pdf_url) if article.pdf_url else ""
+
+                card_html = f"""
+        <div class="article">
+            <div class="priority-indicator {priority}">{priority_text}</div>
+            <h3>{article.title}</h3>
+            <p class="one-liner">{one_liner}</p>
+
+            <div class="personal-relevance">
+                <strong>Why this matters for you:</strong> {relevance}
+            </div>
+
+            <div class="key-takeaway">
+                <strong>Key insight:</strong> {key_takeaway}
+            </div>
+
+            <div class="actions article-links">
+                <a href="{abstract_url}" class="primary-action">{action_text}</a>
+                {f'<a href="{pdf_url}" class="secondary-action">Full paper</a>' if article.type != ContentType.NEWS and pdf_url else ''}
+            </div>
+        </div>
+"""
+                cards.append(card_html)
+
+            return f"""
+    <div class="content-section">
+        <div class="section-header">
+            <h2>{section_title}</h2>
+            <span class="section-count">{len(articles)} items</span>
+        </div>
+        <div class="articles-grid">
+            {''.join(cards)}
+        </div>
+    </div>
+"""
+        except Exception as e:
+            logfire.error(f"Error generating priority section: {e}")
+            return ""
+
+    def _generate_quick_scan_section(self, articles: List[ArticleAnalysis]) -> str:
+        """Generate quick scan section for lower priority items."""
+        if not articles:
+            return ""
+
+        try:
+            items = []
+            for article in articles[:5]:  # Limit to 5 items
+                icon = "📰" if article.type == ContentType.NEWS else "📄"
+                # Ultra-short summary
+                summary = self._simplify_content(article.summary.split('.')[0], 80)
+                title_truncated = article.title[:50] + '...' if len(article.title) > 50 else article.title
+                abstract_url = str(article.abstract_url) if article.abstract_url else "#"
+
+                item_html = f"""
+        <li>
+            {icon} <strong>{title_truncated}</strong> -
+            {summary}
+            <a href="{abstract_url}">→</a>
+        </li>
+"""
+                items.append(item_html)
+
+            return f"""
+    <div class="content-section">
+        <h2 class="section-header">🔍 Quick Scan</h2>
+        <ul class="quick-scan">
+            {''.join(items)}
+        </ul>
+    </div>
+"""
+        except Exception as e:
+            logfire.error(f"Error generating quick scan section: {e}")
+            return ""
+
+    def _generate_html_footer(self, total_items: int) -> str:
+        """Generate simplified footer with stats."""
+        try:
+            papers_reviewed = total_items * 4  # Rough estimate
+            directly_applicable = int(total_items * 0.4)
+
+            return f"""
     <div class="footer">
-        <p>🤖 Generated by Paperboy AI Research Assistant</p>
-        <p>Combining the latest research papers with relevant industry news</p>
+        <p><strong>Your weekly impact:</strong>
+        <span class="stats">{papers_reviewed}</span> papers reviewed •
+        <span class="stats">{total_items}</span> selected for you •
+        <span class="stats">{directly_applicable}</span> directly applicable</p>
+        <p>Paperboy AI • Saving you hours of research weekly</p>
     </div>
 </body>
 </html>
-""")
+"""
+        except Exception as e:
+            logfire.error(f"Error generating footer: {e}")
+            return "</body></html>"
 
-        return ''.join(html_parts)
+    def _get_user_focus_area(self) -> str:
+        """Extract user's primary focus area from their info."""
+        # This would need to be passed through or stored in instance
+        return "AI Research"
 
-    def _generate_papers_section(self, papers: List[ArticleAnalysis]) -> str:
-        """[Original implementation - exactly the same]"""
-        section_html = [f"""
-    <div class="content-section">
-        <div class="section-header">
-            <h2>📚 Research Papers</h2>
-            <span class="section-count">{len(papers)} articles</span>
-        </div>
-        <div class="articles-grid">
-"""]
-
-        for idx, paper in enumerate(papers):
-            score_class = 'high-score' if paper.relevance_score >= 80 else 'medium-score' if paper.relevance_score >= 60 else 'low-score'
-            
-            section_html.append(f"""
-            <div class="article paper-article">
-                <span class="content-type-badge paper-badge">Paper</span>
-                <h3>{paper.title}</h3>
-                <div class="metadata">
-                    <span class="score {score_class}">Score: {paper.relevance_score}/100</span>
-                    <span class="source-tag">📝 {paper.subject}</span>
-                    <span class="metadata-item">👥 {', '.join(paper.authors[:3])}{'...' if len(paper.authors) > 3 else ''}</span>
-                    <span class="reading-time">⏱ 5 min read</span>
-                </div>
-
-                <div class="section">
-                    <h4>🎯 Why This Matters to You</h4>
-                    <p>{paper.relevance_to_user}</p>
-                </div>
-
-                <div class="key-findings">
-                    <h4>🔍 Key Findings</h4>
-                    <ul>
-                        {''.join(f'<li>{finding}</li>' for finding in paper.key_findings[:3])}
-                    </ul>
-                    {f'''<div class="expandable">
-                        <span class="expand-toggle" id="paper-{idx}-findings-toggle" onclick="toggleExpand('paper-{idx}-findings')">▶ Show {len(paper.key_findings) - 3} more findings</span>
-                        <div id="paper-{idx}-findings" class="expandable-content hidden">
-                            <ul>
-                                {''.join(f'<li>{finding}</li>' for finding in paper.key_findings[3:])}
-                            </ul>
-                        </div>
-                    </div>''' if len(paper.key_findings) > 3 else ''}
-                </div>
-
-                <div class="expandable">
-                    <span class="expand-toggle" id="paper-{idx}-details-toggle" onclick="toggleExpand('paper-{idx}-details')">▶ Show technical details</span>
-                    <div id="paper-{idx}-details" class="expandable-content hidden">
-                        <div class="section">
-                            <h4>🔧 Technical Details</h4>
-                            <p>{paper.technical_details}</p>
-                        </div>
-                        
-                        <div class="section">
-                            <h4>💡 Potential Applications</h4>
-                            <p>{paper.potential_applications}</p>
-                        </div>
-                    </div>
-                </div>
-
-                {f'''<div class="section">
-                    <h4>⚠️ Critical Notes</h4>
-                    <p>{paper.critical_notes}</p>
-                </div>''' if paper.critical_notes else ''}
-
-                {f'''<div class="section">
-                    <h4>🔗 Next Steps</h4>
-                    <p>{paper.follow_up_suggestions}</p>
-                </div>''' if paper.follow_up_suggestions else ''}
-
-                <div class="action-box">
-                    <h4>📋 Recommended Action</h4>
-                    <p><strong>{paper.recommended_action}</strong></p>
-                </div>
-
-                <div class="article-links">
-                    <a href="{paper.abstract_url}" target="_blank">📄 View Abstract</a>
-                    {f'<a href="{paper.pdf_url}" target="_blank">📁 Download PDF</a>' if paper.pdf_url else ''}
-                </div>
-            </div>
-""")
-
-        section_html.append("""
-        </div>
-    </div>
-""")
-        return ''.join(section_html)
-
-    def _generate_news_section(self, news: List[ArticleAnalysis]) -> str:
-        """[Original implementation - exactly the same]"""
-        section_html = [f"""
-    <div class="content-section">
-        <div class="section-header">
-            <h2>📰 Industry News</h2>
-            <span class="section-count">{len(news)} articles</span>
-        </div>
-        <div class="news-grid">
-"""]
-
-        for idx, article in enumerate(news):
-            pub_date = ""
-            freshness = ""
-            if hasattr(article, 'published_at') and article.published_at:
-                try:
-                    from datetime import datetime, timezone
-                    if isinstance(article.published_at, str):
-                        date_obj = datetime.fromisoformat(article.published_at.replace('Z', '+00:00'))
-                        pub_date = date_obj.strftime("%B %d, %Y")
-                        
-                        now = datetime.now(timezone.utc)
-                        diff = now - date_obj
-                        if diff.days == 0:
-                            hours = diff.seconds // 3600
-                            freshness = f"{hours} hours ago" if hours > 0 else "Just now"
-                        elif diff.days == 1:
-                            freshness = "Yesterday"
-                        elif diff.days < 7:
-                            freshness = f"{diff.days} days ago"
-                except:
-                    pub_date = article.published_at
-
-            section_html.append(f"""
-            <div class="article news-article">
-                <span class="content-type-badge news-badge">News</span>
-                <h3>{article.title}</h3>
-                <div class="metadata">
-                    <span class="score news-score">Score: {article.relevance_score}/100</span>
-                    {f'<span class="source-tag news-source">📺 {article.source}</span>' if hasattr(article, 'source') and article.source else ''}
-                    {f'<span class="metadata-item">📅 {pub_date}</span>' if pub_date else ''}
-                    {f'<span class="freshness">🔥 {freshness}</span>' if freshness else ''}
-                    <span class="reading-time">⏱ 3 min read</span>
-                </div>
-
-                {f'<img src="{article.url_to_image}" alt="Article image" class="news-image">' if hasattr(article, 'url_to_image') and article.url_to_image else ''}
-
-                <div class="news-summary">
-                    <h4>📰 Summary</h4>
-                    <p>{article.summary}</p>
-                </div>
-
-                <div class="section">
-                    <h4>🎯 Relevance to Your Work</h4>
-                    <p>{article.relevance_to_user}</p>
-                </div>
-
-                <div class="section">
-                    <h4>🔍 Key Points</h4>
-                    <ul>
-                        {''.join(f'<li>{finding}</li>' for finding in article.key_findings)}
-                    </ul>
-                </div>
-
-                <div class="section">
-                    <h4>💼 Importance</h4>
-                    <p>{article.importance}</p>
-                </div>
-
-                {f'''<div class="section">
-                    <h4>🔗 Follow-up</h4>
-                    <p>{article.follow_up_suggestions}</p>
-                </div>''' if article.follow_up_suggestions else ''}
-
-                <div class="action-box">
-                    <h4>📋 Recommended Action</h4>
-                    <p><strong>{article.recommended_action}</strong></p>
-                </div>
-
-                <div class="article-links">
-                    <a href="{article.abstract_url}" target="_blank">🔗 Read Full Article</a>
-                </div>
-            </div>
-""")
-
-        section_html.append("""
-        </div>
-    </div>
-""")
-        return ''.join(section_html)
-
-    async def _complete_task(self, task_id: str, result: str, callback_url: str = None, articles: List[ArticleAnalysis] = None) -> None:
-        """[Original implementation]"""
+    async def _complete_task(
+        self,
+        task_id: str,
+        result: str,
+        callback_url: str = None,
+        articles: List[ArticleAnalysis] = None
+    ) -> None:
+        """Mark task as completed and send callback if needed."""
         await self.state_manager.update_task(
             task_id,
             DigestStatus(
@@ -1208,7 +1259,7 @@ News Articles to rank:
             await self._send_callback(callback_url, task_id, "completed", result)
 
     async def _send_callback(self, callback_url: str, task_id: str, status: str, result: str) -> None:
-        """[Original implementation]"""
+        """Send callback to webhook URL."""
         payload = {
             "task_id": task_id,
             "status": status,
@@ -1224,23 +1275,3 @@ News Articles to rank:
             logfire.info("Callback sent successfully to {url}", url=callback_url)
         except Exception as e:
             logfire.error("Failed to send callback: {error}", error=str(e))
-
-    def set_circuit_breakers(self, circuit_breakers: ServiceCircuitBreakers) -> None:
-        """Inject circuit breakers with proper Supabase configuration from main.py."""
-        self.circuit_breakers = circuit_breakers
-        logfire.info("Circuit breakers updated with external configuration")
-
-    def set_cache(self, cache) -> None:
-        """Inject cache from main.py."""
-        self.cache = cache
-        
-        # Also inject cache into news components
-        if self.news_fetcher:
-            self.news_fetcher.cache = cache
-            logfire.info("Cache injected into news fetcher")
-        
-        if self.content_extractor:
-            self.content_extractor.cache = cache
-            logfire.info("Cache injected into content extractor")
-        
-        logfire.info("Cache injected successfully")

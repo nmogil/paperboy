@@ -46,7 +46,7 @@ USER 10001:10001
 EXPOSE 8080
 
 # Health check for Cloud Run
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=43200s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:${PORT}/diagnostics/logfire-health || exit 1
 
 # Command to run the application

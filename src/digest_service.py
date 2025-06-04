@@ -39,20 +39,32 @@ class DigestService:
             except Exception as e:
                 logfire.error("Failed to initialize news components", extra={"error": str(e)})
 
-    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None) -> None:
+    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None, digest_sources: Optional[Dict[str, bool]] = None) -> None:
         """Generate a complete digest for the user."""
         try:
+            # Set default digest sources if not provided
+            if digest_sources is None:
+                digest_sources = {"arxiv": True, "news_api": settings.news_enabled}
+                
             await self.state_manager.update_task(
                 task_id,
-                DigestStatus(status=TaskStatus.PROCESSING, message="Fetching papers...")
+                DigestStatus(status=TaskStatus.PROCESSING, message="Fetching content...")
             )
 
-            logfire.info("Fetching papers for categories: {categories}", categories=user_info.get('categories', []))
-            articles = await self._fetch_papers(user_info.get('categories', ['cs.AI', 'cs.LG']), target_date)
+            # Fetch papers if enabled
+            articles = []
+            if digest_sources.get("arxiv", True):
+                await self.state_manager.update_task(
+                    task_id,
+                    DigestStatus(status=TaskStatus.PROCESSING, message="Fetching papers...")
+                )
+                logfire.info("Fetching papers for categories: {categories}", categories=user_info.get('categories', []))
+                articles = await self._fetch_papers(user_info.get('categories', ['cs.AI', 'cs.LG']), target_date)
+                logfire.info("Fetched ArXiv articles", extra={"count": len(articles)})
 
             # Fetch news if enabled
             news_articles = []
-            if self.news_fetcher and self.content_extractor and self.query_generator:
+            if digest_sources.get("news_api", False) and self.news_fetcher and self.content_extractor and self.query_generator:
                 await self.state_manager.update_task(
                     task_id,
                     DigestStatus(status=TaskStatus.PROCESSING, message="Fetching relevant news...")
@@ -64,7 +76,8 @@ class DigestService:
             all_content = articles + news_articles
 
             if not all_content:
-                await self._complete_task(task_id, "No papers or news found", callback_url)
+                sources_requested = [k for k, v in digest_sources.items() if v]
+                await self._complete_task(task_id, f"No content found for requested sources: {', '.join(sources_requested)}", callback_url)
                 return
 
             await self.state_manager.update_task(
@@ -78,14 +91,14 @@ class DigestService:
             ranked_articles = await self._rank_content(all_content, user_info, top_n)
 
             if not ranked_articles:
-                await self._complete_task(task_id, "No relevant papers found", callback_url)
+                await self._complete_task(task_id, "No relevant content found", callback_url)
                 return
 
             await self.state_manager.update_task(
                 task_id,
                 DigestStatus(
                     status=TaskStatus.PROCESSING,
-                    message=f"Analyzing top {len(ranked_articles)} papers..."
+                    message=f"Analyzing top {len(ranked_articles)} items..."
                 )
             )
 

@@ -301,24 +301,35 @@ Content items:
         article_metadata: Dict[str, Any],
         user_info: Dict[str, Any]
     ) -> ArticleAnalysis:
-        """Analyze a single article."""
-        system_prompt = """Analyze the following arXiv article for the user based on their research profile.
+        """Analyze a single article with simplified language."""
+        system_prompt = """Analyze the following article for the user based on their profile.
+
+Your response MUST use simple, conversational language. Avoid academic jargon. Write as if explaining to a colleague over coffee.
+
+Focus on:
+1. What this actually means in practical terms
+2. How it directly impacts their daily work
+3. What specific action they should take
 
 Your response MUST be **only** a valid JSON object structured exactly as follows:
 
 {
-  "summary": "<A concise summary of the article's key findings and contributions.>",
-  "importance": "<Explanation of the article's importance or significance in its field and to the user's interests.>",
-  "recommended_action": "<Suggested next step for the user regarding this article (e.g., 'Read abstract', 'Skim PDF', 'Deep dive', 'Share with team', 'Ignore').>",
-  "key_findings": ["<Key finding 1>", "<Key finding 2>", "<Key finding 3>"],
-  "relevance_to_user": "<How this paper connects to the user's work and research interests.>",
-  "technical_details": "<Important methods, techniques, or results from the paper.>",
-  "potential_applications": "<How the user might apply this research in their own work.>",
-  "critical_notes": "<Limitations, concerns, or critical observations about the paper (or null if none).>",
-  "follow_up_suggestions": "<Related papers or next steps for the user to explore (or null if none).>"
+  "summary": "<One clear sentence explaining what this is about. No jargon.>",
+  "importance": "<Why they should care, in plain English. Be specific to their role.>",
+  "recommended_action": "<Specific next step: 'Add X to your test suite', 'Review your Y process', 'No action needed', etc.>",
+  "key_findings": ["<Finding 1 in simple terms>", "<Finding 2>", "<Finding 3>"],
+  "relevance_to_user": "<How this connects to their specific work. Use 'you' and 'your'. Be direct.>",
+  "technical_details": "<Only the technical bits they need to know, simplified.>",
+  "potential_applications": "<Concrete ways they could use this in their work.>",
+  "critical_notes": "<Any warnings or limitations they should know about (or null).>",
+  "follow_up_suggestions": "<Specific resources or actions if they want to dig deeper (or null).>"
 }
 
-Do not include any other text, explanations, or markdown formatting outside of this JSON structure."""
+Example of good vs bad:
+BAD: "This paper presents novel methodologies for optimizing transformer architectures..."
+GOOD: "Researchers found a way to make AI respond 40% faster - this could speed up your voice tests."
+
+Do not include any other text outside of this JSON structure."""
 
         user_prompt = f"""User Name: {user_info.get('name', 'Researcher')}
 User Title: {user_info.get('title', 'Researcher')}

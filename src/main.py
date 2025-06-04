@@ -2,6 +2,7 @@
 Enhanced main.py with Supabase state management, circuit breakers, and graceful shutdown.
 """
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import uuid
@@ -248,7 +249,8 @@ async def generate_digest(
                 user_info,
                 str(request.callback_url) if request.callback_url else None,
                 request.target_date,
-                request.top_n_articles
+                request.top_n_articles,
+                request.digest_sources
             )
     else:
         background_tasks.add_task(
@@ -257,7 +259,8 @@ async def generate_digest(
             user_info,
             str(request.callback_url) if request.callback_url else None,
             request.target_date,
-            request.top_n_articles
+            request.top_n_articles,
+            request.digest_sources
         )
 
     return GenerateDigestResponse(
@@ -286,6 +289,42 @@ async def get_digest_status(task_id: str) -> DigestStatusResponse:
         result=status.result,
         articles=articles_dict
     )
+
+
+@app.get("/preview-new-format/{task_id}", response_class=HTMLResponse)
+async def preview_new_format(task_id: str, api_key: str = Depends(validate_api_key)):
+    """Preview the newsletter format for a completed task."""
+    try:
+        status = await app.state.state_manager.get_task(task_id)
+
+        if not status or status.status != TaskStatus.COMPLETED:
+            raise HTTPException(status_code=404, detail="Task not found or not completed")
+
+        # Try to get user info from task or use defaults
+        user_info = {
+            "name": "Test User",
+            "title": "Researcher",
+            "goals": "AI Research"
+        }
+
+        # If we have a way to get user info from task, use it
+        if hasattr(status, 'user_info') and status.user_info:
+            user_info.update(status.user_info)
+
+        # Re-generate HTML
+        if status.articles:
+            html = app.state.digest_service._generate_html(
+                status.articles,
+                user_info
+            )
+            return HTMLResponse(content=html)
+
+        raise HTTPException(status_code=404, detail="No articles found in task")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logfire.error(f"Error generating preview: {e}")
+        raise HTTPException(status_code=500, detail=f"Error generating preview: {str(e)}")
 
 
 @app.get("/health")

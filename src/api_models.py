@@ -9,6 +9,10 @@ class GenerateDigestRequest(BaseModel):
     top_n_articles: Optional[int] = None
     callback_url: Optional[HttpUrl] = None
     categories: List[str] = Field(default=["cs.AI", "cs.LG"])
+    digest_sources: Optional[Dict[str, bool]] = Field(
+        default=None,
+        description="Control which sources to include in digest generation. Defaults to all enabled sources if not specified."
+    )
 
 class GenerateDigestResponse(BaseModel):
     """Response model for the digest generation request."""
