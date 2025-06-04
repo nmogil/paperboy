@@ -13,7 +13,7 @@ MEMORY="${MEMORY:-512Mi}"  # Reduced from 1Gi - sufficient for lightweight versi
 CPU="${CPU:-1}"
 MIN_INSTANCES="${MIN_INSTANCES:-0}"
 MAX_INSTANCES="${MAX_INSTANCES:-50}"  # Need 50 instances for 50 concurrent requests
-CONCURRENCY="${CONCURRENCY:-1}"       # MUST be 1 due to in-memory state
+CONCURRENCY="${CONCURRENCY:-5}"       # Increased from 1 with Supabase state management
 
 # Colors for output
 RED='\033[0;31m'
@@ -98,6 +98,15 @@ if [ ! -z "$TAVILY_API_KEY" ]; then
     create_or_update_secret "TAVILY_API_KEY" "$TAVILY_API_KEY"
 fi
 
+# Create Supabase secrets if environment variables are set
+if [ ! -z "$SUPABASE_URL" ]; then
+    create_or_update_secret "SUPABASE_URL" "$SUPABASE_URL"
+fi
+
+if [ ! -z "$SUPABASE_KEY" ]; then
+    create_or_update_secret "SUPABASE_KEY" "$SUPABASE_KEY"
+fi
+
 # Build the container image
 echo -e "${YELLOW}🏗️  Building container image...${NC}"
 gcloud builds submit \
@@ -114,9 +123,21 @@ while IFS='=' read -r key value; do
     ENV_VARS="${ENV_VARS}${key}=projects/$PROJECT_ID/secrets/$key:latest,"
 done < config/.env
 
-# Add lightweight mode flag
+# Add enhanced features configuration
 ENV_VARS="${ENV_VARS}USE_LIGHTWEIGHT=true,"
+ENV_VARS="${ENV_VARS}USE_EXTERNAL_STATE=true,"
+ENV_VARS="${ENV_VARS}SHUTDOWN_TIMEOUT=30,"
+ENV_VARS="${ENV_VARS}CACHE_TTL=3600,"
 ENV_VARS="${ENV_VARS}PORT=8080"
+
+# Add Supabase secrets if they exist
+if [ ! -z "$SUPABASE_URL" ]; then
+    ENV_VARS="${ENV_VARS},SUPABASE_URL=projects/$PROJECT_ID/secrets/SUPABASE_URL:latest"
+fi
+
+if [ ! -z "$SUPABASE_KEY" ]; then
+    ENV_VARS="${ENV_VARS},SUPABASE_KEY=projects/$PROJECT_ID/secrets/SUPABASE_KEY:latest"
+fi
 
 # Deploy the service
 gcloud run deploy "$SERVICE_NAME" \
@@ -157,6 +178,8 @@ echo -e "${GREEN}✅ Deployment complete!${NC}"
 echo -e "${GREEN}Service URL: $SERVICE_URL${NC}"
 echo ""
 echo -e "${YELLOW}📝 Next steps:${NC}"
-echo "1. To allow public access: gcloud run services add-iam-policy-binding $SERVICE_NAME --member=\"allUsers\" --role=\"roles/run.invoker\" --region=$REGION"
-echo "2. To test the API: curl -H \"X-API-Key: YOUR_API_KEY\" $SERVICE_URL/docs"
-echo "3. To view logs: gcloud logging read \"resource.type=cloud_run_revision AND resource.labels.service_name=$SERVICE_NAME\" --limit 50"
+echo "1. Create the required Supabase tables (see supabase_setup.sql)"
+echo "2. To allow public access: gcloud run services add-iam-policy-binding $SERVICE_NAME --member=\"allUsers\" --role=\"roles/run.invoker\" --region=$REGION"
+echo "3. To test the API: curl -H \"X-API-Key: YOUR_API_KEY\" $SERVICE_URL/docs"
+echo "4. To view logs: gcloud logging read \"resource.type=cloud_run_revision AND resource.labels.service_name=$SERVICE_NAME\" --limit 50"
+echo "5. To check metrics: curl -H \"X-API-Key: YOUR_API_KEY\" $SERVICE_URL/metrics"

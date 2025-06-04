@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional
 from supabase import create_client, Client
 
 from .api_models import GenerateDigestRequest, GenerateDigestResponse, DigestStatusResponse
-from .digest_service_enhanced import EnhancedDigestService as DigestService
+from .digest_service import DigestService
 from .models import TaskStatus, DigestStatus
 from .security import validate_api_key
 from .config import settings
@@ -259,11 +259,12 @@ async def generate_digest(
             request.target_date,
             request.top_n_articles
         )
-
+    
     return GenerateDigestResponse(
         task_id=task_id,
         status="processing",
-        message="Digest generation started"
+        message="Digest generation started",
+        status_url=f"/digest-status/{task_id}"
     )
 
 
@@ -271,14 +272,14 @@ async def generate_digest(
 async def get_digest_status(task_id: str) -> DigestStatusResponse:
     """Check the status of a digest generation task."""
     status = await app.state.state_manager.get_task(task_id)
-
+    
     if not status:
         raise HTTPException(status_code=404, detail="Task not found")
-
+    
     articles_dict = None
     if status.articles:
         articles_dict = [article.model_dump() for article in status.articles]
-
+    
     return DigestStatusResponse(
         task_id=task_id,
         status=status.status.value,
@@ -290,35 +291,68 @@ async def get_digest_status(task_id: str) -> DigestStatusResponse:
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "version": "2.1.0"}
+    """Enhanced health check endpoint."""
+    health_status = {
+        "status": "healthy",
+        "version": "2.1.0",
+        "features": {
+            "external_state": os.getenv('USE_EXTERNAL_STATE', 'true') == 'true',
+            "circuit_breakers": True,
+            "graceful_shutdown": True,
+            "hybrid_cache": app.state.cache is not None
+        }
+    }
+    
+    # Check circuit breaker status
+    if hasattr(app.state, 'circuit_breakers'):
+        breaker_status = await app.state.circuit_breakers.get_all_status()
+        open_breakers = [name for name, status in breaker_status.items() if status['state'] == 'OPEN']
+        if open_breakers:
+            health_status["status"] = "degraded"
+            health_status["open_circuit_breakers"] = open_breakers
+    
+    # Check if shutting down
+    if SHUTDOWN_HANDLER and SHUTDOWN_HANDLER.is_shutting_down():
+        health_status["status"] = "shutting_down"
+    
+    return health_status
 
 
 @app.get("/metrics")
 async def get_metrics(api_key: str = Depends(validate_api_key)):
-    """Get application metrics and circuit breaker status."""
+    """Get application metrics."""
     metrics = {
-        "version": "2.1.0",
-        "use_external_state": os.getenv('USE_EXTERNAL_STATE', 'true').lower() == 'true',
-        "has_supabase": app.state.supabase_client is not None,
-        "has_cache": app.state.cache is not None,
-        "circuit_breakers": await app.state.circuit_breakers.get_all_status() if app.state.circuit_breakers else {},
+        "tasks": {
+            "recent": []
+        },
+        "circuit_breakers": {},
+        "shutdown": {
+            "is_shutting_down": False,
+            "active_requests": 0
+        }
     }
     
-    # Add recent tasks if state manager supports it
+    # Get recent tasks if using Supabase
     if hasattr(app.state.state_manager, 'get_recent_tasks'):
-        try:
-            metrics["recent_tasks"] = await app.state.state_manager.get_recent_tasks(5)
-        except Exception as e:
-            logfire.error(f"Failed to get recent tasks: {e}")
+        metrics["tasks"]["recent"] = await app.state.state_manager.get_recent_tasks(limit=5)
+    
+    # Get circuit breaker status
+    if hasattr(app.state, 'circuit_breakers'):
+        metrics["circuit_breakers"] = await app.state.circuit_breakers.get_all_status()
+    
+    # Get shutdown status
+    if SHUTDOWN_HANDLER:
+        metrics["shutdown"]["is_shutting_down"] = SHUTDOWN_HANDLER.is_shutting_down()
+        metrics["shutdown"]["active_requests"] = len(SHUTDOWN_HANDLER.active_requests)
     
     return metrics
 
 
+# Backward compatibility endpoints
 @app.get("/digest-status/health")
 async def health_check_alt():
-    """Alternative health check endpoint."""
-    return {"status": "healthy", "version": "2.1.0"}
+    """Alternative health check endpoint for backward compatibility."""
+    return await health_check()
 
 
 @app.post("/generate_digest", response_model=GenerateDigestResponse, dependencies=[Depends(validate_api_key)])

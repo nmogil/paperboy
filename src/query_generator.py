@@ -53,7 +53,8 @@ class QueryGenerator:
         queries = []
         
         # PRIORITY: Use news_interest if provided (this is the main fix)
-        news_interest = user_info.get('news_interest', '').strip()
+        news_interest = user_info.get('news_interest') or ''
+        news_interest = news_interest.strip() if news_interest else ''
         if news_interest:
             # Add the news interest as the primary query
             queries.append(news_interest)
@@ -69,7 +70,7 @@ class QueryGenerator:
             logfire.info("Using news_interest as primary query", extra={"news_interest": news_interest})
         
         # Company extraction with better regex
-        title = user_info.get('title', '')
+        title = user_info.get('title') or ''
         company_patterns = [
             r'\bat\s+([A-Z]\w+(?:\s+[A-Z]\w+)*)',  # at Company Name
             r'(?:^|\s)([A-Z]\w+(?:\s+[A-Z]\w+)*)\s+(?:Inc|Corp|LLC|Ltd)',  # Company Inc
@@ -83,7 +84,8 @@ class QueryGenerator:
                 queries.append(company)
                 
                 # Add company + domain combinations
-                if 'AI' in user_info.get('goals', '').upper() or news_interest.lower() == 'ai':
+                goals = user_info.get('goals') or ''
+                if 'AI' in goals.upper() or (news_interest and news_interest.lower() == 'ai'):
                     queries.append(f'"{company}" AI artificial intelligence')
                 if 'voice' in title.lower():
                     queries.append(f'"{company}" voice technology')
@@ -108,7 +110,7 @@ class QueryGenerator:
         
         # Interest-based queries (only if no news_interest)
         if not news_interest:
-            goals = user_info.get('goals', '')
+            goals = user_info.get('goals') or ''
             if goals:
                 # Extract key phrases
                 interest_patterns = [
@@ -119,7 +121,9 @@ class QueryGenerator:
                 for pattern in interest_patterns:
                     matches = re.findall(pattern, goals, re.IGNORECASE)
                     for match in matches:
-                        queries.append(match.strip())
+                        clean_match = match.strip() if match else ''
+                        if clean_match:
+                            queries.append(clean_match)
         
         return queries[:7]  # Increased limit to allow for news_interest variations
     
@@ -149,7 +153,7 @@ class QueryGenerator:
         interests = []
         
         # From goals
-        goals = user_info.get('goals', '')
+        goals = user_info.get('goals') or ''
         if 'AI' in goals.upper():
             interests.append('artificial intelligence')
         if 'machine learning' in goals.lower():

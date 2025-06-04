@@ -4,7 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Paperboy is an AI-powered academic paper recommendation system that ranks and analyzes arXiv papers based on user research profiles. It uses OpenAI models to provide personalized digests of relevant research papers and now includes news integration via NewsAPI and Tavily for content extraction.
+Paperboy is an AI-powered academic paper recommendation system that ranks and analyzes arXiv papers based on user research profiles. It uses OpenAI models to provide personalized digests of relevant research papers and now includes news integration via NewsAPI and Tavily for content extraction. The system includes enhanced reliability features including circuit breakers, Supabase state management, graceful shutdown, and comprehensive error handling.
+
+**Recent Enhancements:**
+- **Supabase Integration**: External state management and distributed caching
+- **Circuit Breakers**: Graceful degradation when external services fail  
+- **Graceful Shutdown**: Proper SIGTERM handling for Cloud Run
+- **Enhanced Error Handling**: Comprehensive fallback strategies
+- **Distributed State**: Enables higher concurrency in Cloud Run
+
+**Recent Enhancements:**
+- **Supabase Integration**: External state management and distributed caching
+- **Circuit Breakers**: Graceful degradation when external services fail
+- **Graceful Shutdown**: Proper handling of Cloud Run termination signals
+- **Improved Concurrency**: Increased from 1 to 5 instances with external state
+- **Hybrid Caching**: Memory + persistent cache for optimal performance
 
 ## Key Commands
 
@@ -18,7 +32,9 @@ docker-compose up --build
 docker build -t paperboy:latest .
 docker run -p 8000:8000 --env-file config/.env paperboy:latest
 
-# Cloud Run deployment
+# Cloud Run deployment (now with Supabase support)
+export SUPABASE_URL=your-supabase-url
+export SUPABASE_KEY=your-supabase-key
 ./deploy_cloudrun.sh
 
 # Cloud Build deployment (automatic)
@@ -71,8 +87,8 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 
 The codebase follows a modular architecture with clear separation of concerns:
 
-1. **API Layer** (`main.py`): FastAPI application handling HTTP endpoints and background tasks
-2. **Digest Service** (`digest_service.py`): Orchestrates the full digest generation workflow
+1. **API Layer** (`main.py`, `main_updated.py`): FastAPI application handling HTTP endpoints and background tasks
+2. **Digest Service** (`digest_service.py`, `digest_service_enhanced.py`): Orchestrates the full digest generation workflow
 3. **LLM Client** (`llm_client.py`): Direct OpenAI integration for ranking and analysis
 4. **Data Fetching** (`fetcher_lightweight.py`): Web scraping of arXiv using httpx
 5. **News Integration** (`news_fetcher.py`): NewsAPI integration with intelligent query generation
@@ -80,10 +96,17 @@ The codebase follows a modular architecture with clear separation of concerns:
 7. **Query Generation** (`query_generator.py`): Smart news query generation based on user profiles
 8. **Models** (`models.py`): Pydantic models for type safety across the system
 9. **Configuration** (`config.py`): Centralized settings management via Pydantic BaseSettings
-10. **State Management** (`state.py`): JSON-based task state persistence
+10. **State Management**: 
+    - `state.py`: In-memory task state persistence (fallback)
+    - `state_supabase.py`: Supabase-based distributed state management
 11. **Security** (`security.py`): API key authentication middleware
-12. **Caching** (`cache.py`): In-memory cache with TTL for API responses
+12. **Caching**:
+    - `cache.py`: In-memory cache with TTL (fallback)
+    - `cache_supabase.py`: Hybrid cache with Supabase persistence
 13. **Metrics** (`metrics.py`): Performance monitoring and API call tracking
+14. **Reliability**:
+    - `circuit_breaker.py`: Circuit breaker pattern for external services
+    - `graceful_shutdown.py`: Proper handling of shutdown signals
 
 ### Key Design Patterns
 

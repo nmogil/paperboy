@@ -1,12 +1,12 @@
 import asyncio
+import httpx
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime, timedelta
-import httpx
 import logfire
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import time
 
 from .config import settings
-from .cache import SimpleCache  # New cache module
 from .metrics import NewsMetrics
 
 class NewsAPIError(Exception):
@@ -27,9 +27,74 @@ class NewsAPIFetcher:
         self.api_key = settings.newsapi_key
         self.base_url = "https://newsapi.org/v2/everything"
         self.client = httpx.AsyncClient(timeout=30.0)
-        self.cache = SimpleCache(ttl=settings.news_cache_ttl)
-        self._rate_limiter = asyncio.Semaphore(5)  # Max 5 concurrent requests
+        
+        # Time-based rate limiting: NewsAPI free tier allows ~100 requests per day
+        # We'll be conservative and limit to 1 request per 2 seconds (1800 per hour max)
+        self._last_request_time = 0
+        self._min_request_interval = 2.0  # seconds between requests
+        self._rate_limit_lock = asyncio.Lock()
+        
+        # Concurrent request limiter
+        self._concurrent_limiter = asyncio.Semaphore(3)  # Reduced to 3 concurrent
+        
+        # Circuit breaker state tracking
+        self._consecutive_failures = 0
+        self._circuit_open = False
+        self._circuit_open_until = 0
+        
+        # Cache to avoid duplicate requests
+        self.cache = None
     
+    async def _wait_for_rate_limit(self):
+        """Ensure we don't exceed time-based rate limits."""
+        async with self._rate_limit_lock:
+            current_time = time.time()
+            time_since_last = current_time - self._last_request_time
+            
+            if time_since_last < self._min_request_interval:
+                wait_time = self._min_request_interval - time_since_last
+                logfire.info("Rate limiting: waiting {wait_time:.2f}s", wait_time=wait_time)
+                await asyncio.sleep(wait_time)
+            
+            self._last_request_time = time.time()
+
+    def _check_circuit_breaker(self):
+        """Check if circuit breaker should prevent requests."""
+        if not self._circuit_open:
+            return True
+        
+        if time.time() > self._circuit_open_until:
+            # Reset circuit breaker
+            self._circuit_open = False
+            self._consecutive_failures = 0
+            logfire.info("NewsAPI circuit breaker reset")
+            return True
+        
+        logfire.warn("NewsAPI circuit breaker is open, blocking request")
+        return False
+
+    def _handle_success(self):
+        """Handle successful request - reset failure counters."""
+        self._consecutive_failures = 0
+        if self._circuit_open:
+            self._circuit_open = False
+            logfire.info("NewsAPI circuit breaker closed after successful request")
+
+    def _handle_failure(self, is_rate_limit: bool = False):
+        """Handle failed request - update circuit breaker state."""
+        self._consecutive_failures += 1
+        
+        if is_rate_limit and self._consecutive_failures >= 3:
+            # Open circuit breaker for rate limit issues
+            self._circuit_open = True
+            self._circuit_open_until = time.time() + 300  # 5 minutes
+            logfire.warn("NewsAPI circuit breaker opened due to rate limiting for 5 minutes")
+        elif self._consecutive_failures >= 5:
+            # Open circuit breaker for other failures
+            self._circuit_open = True
+            self._circuit_open_until = time.time() + 60  # 1 minute
+            logfire.warn("NewsAPI circuit breaker opened due to failures for 1 minute")
+
     @NewsMetrics.track_api_call("NewsAPI")
     async def fetch_news(
         self,
@@ -40,12 +105,18 @@ class NewsAPIFetcher:
         """
         Fetch news articles based on queries with intelligent deduplication.
         """
+        # Check circuit breaker first
+        if not self._check_circuit_breaker():
+            logfire.warn("NewsAPI circuit breaker is open, returning empty results")
+            return []
+        
         # Check cache first
         cache_key = f"news:{','.join(sorted(queries))}:{target_date or 'latest'}"
-        cached = await self.cache.get(cache_key)
-        if cached:
-            logfire.info("News cache hit", extra={"cache_key": cache_key})
-            return cached
+        if self.cache:
+            cached = await self.cache.get(cache_key)
+            if cached:
+                logfire.info("News cache hit", extra={"cache_key": cache_key})
+                return cached
         
         # Set date range with better logic
         from_date, to_date = self._calculate_date_range(target_date)
@@ -57,13 +128,28 @@ class NewsAPIFetcher:
         # Smart query batching
         queries_to_fetch = self._optimize_queries(queries)
         
-        for query in queries_to_fetch:
+        # Limit number of queries to respect rate limits
+        max_queries = 3 if self._consecutive_failures > 0 else 5
+        queries_to_fetch = queries_to_fetch[:max_queries]
+        
+        logfire.info("Fetching news", extra={
+            "original_queries": len(queries),
+            "optimized_queries": len(queries_to_fetch),
+            "max_articles": max_articles
+        })
+        
+        for i, query in enumerate(queries_to_fetch):
             try:
-                async with self._rate_limiter:
+                # Rate limiting and concurrent limiting
+                async with self._concurrent_limiter:
+                    await self._wait_for_rate_limit()
+                    
                     articles = await self._fetch_for_query(
                         query, from_date, to_date,
                         max(10, max_articles // len(queries_to_fetch))
                     )
+                    
+                    self._handle_success()
                     
                     # Deduplicate
                     for article in articles:
@@ -73,10 +159,20 @@ class NewsAPIFetcher:
             
             except RateLimitError:
                 logfire.warn("Rate limit hit for NewsAPI", extra={"query": query})
-                await asyncio.sleep(5)  # Back off
-                continue
+                self._handle_failure(is_rate_limit=True)
+                
+                # If we hit rate limit, stop making more requests
+                logfire.warn("Stopping further NewsAPI requests due to rate limit")
+                break
             except Exception as e:
                 logfire.error("Failed to fetch news", extra={"query": query, "error": str(e)})
+                self._handle_failure(is_rate_limit=False)
+                continue
+        
+        # If we got no successful requests, consider this a failure
+        if len(all_articles) == 0:
+            logfire.warn("No successful NewsAPI requests")
+            return []
         
         # Sort by relevance and recency
         all_articles.sort(
@@ -86,10 +182,17 @@ class NewsAPIFetcher:
         
         result = all_articles[:max_articles]
         
-        # Cache the result
-        await self.cache.set(cache_key, result)
+        # Cache the result only if we have a cache and got some articles
+        if result and self.cache:
+            # Shorter cache time if we had failures
+            successful_requests = len([q for q in queries_to_fetch if q])  # Rough estimate
+            cache_ttl = 1800 if successful_requests == len(queries_to_fetch) else 600
+            await self.cache.set(cache_key, result, ttl=cache_ttl)
         
-        logfire.info("Fetched news articles", extra={"count": len(result)})
+        logfire.info("Fetched news articles", extra={
+            "count": len(result),
+            "successful_requests": len(queries_to_fetch)
+        })
         return result
     
     def _calculate_date_range(self, target_date: Optional[str]) -> tuple[str, str]:
@@ -219,16 +322,16 @@ class NewsAPIFetcher:
             relevance_score = self._calculate_relevance(article, query)
             
             articles.append({
-                'title': article.get('title', ''),
-                'description': article.get('description', ''),
-                'url': article.get('url', ''),
-                'published_at': article.get('publishedAt', ''),
-                'source': article.get('source', {}).get('name', ''),
-                'author': article.get('author', ''),
-                'url_to_image': article.get('urlToImage', ''),
+                'title': article.get('title') or '',
+                'description': article.get('description') or '',
+                'url': article.get('url') or '',
+                'published_at': article.get('publishedAt') or '',
+                'source': (article.get('source') or {}).get('name') or '',
+                'author': article.get('author') or '',
+                'url_to_image': article.get('urlToImage') or '',
                 'type': 'news',
                 'subject': 'news',
-                'content_preview': article.get('content', '')[:200],
+                'content_preview': (article.get('content') or '')[:200],
                 'relevance_score': relevance_score
             })
         
@@ -240,12 +343,14 @@ class NewsAPIFetcher:
         score = 0.0
         
         # Check title (highest weight)
-        title = (article.get('title', '') or '').lower()
+        title = article.get('title') or ''
+        title = title.lower() if title else ''
         title_matches = sum(1 for term in query_terms if term in title)
         score += title_matches * 0.5
         
         # Check description
-        desc = (article.get('description', '') or '').lower()
+        desc = article.get('description') or ''
+        desc = desc.lower() if desc else ''
         desc_matches = sum(1 for term in query_terms if term in desc)
         score += desc_matches * 0.3
         

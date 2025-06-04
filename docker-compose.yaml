@@ -14,9 +14,15 @@ services:
     environment:
       - PORT=8080
       - USE_LIGHTWEIGHT=true  # Ensure lightweight mode
-      - LOG_LEVEL=WARNING
-      - UVICORN_ACCESS_LOG=0
-      - UVICORN_LOG_LEVEL=warning
+      - USE_EXTERNAL_STATE=true  # Enable Supabase state management
+      - SHUTDOWN_TIMEOUT=30
+      - CACHE_TTL=3600
+      - LOG_LEVEL=INFO  # Changed from WARNING to INFO for better debugging
+      - UVICORN_ACCESS_LOG=1  # Enable access logs for debugging
+      - UVICORN_LOG_LEVEL=info
+      # Supabase configuration (will be loaded from .env file, with fallbacks)
+      - SUPABASE_URL=${SUPABASE_URL:-https://ovnpankwmmrmhqkxsqqq.supabase.co}
+      - SUPABASE_KEY=${SUPABASE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im92bnBhbmt3bW1ybWhxa3hzcXFxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDUwMDA1NjQsImV4cCI6MjA2MDU3NjU2NH0.2xkUmKILhpPR2CkzvWl7pJenRNA2gEsn1Q3P1fDsIqY}
     volumes:
       - ./config/.env:/app/config/.env:ro  # Mount .env file as read-only
       - ./data:/app/data  # Mount data directory for state persistence
@@ -32,7 +38,7 @@ services:
       - /run
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/digest-status/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -48,8 +54,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'  # Reduced for lightweight
-          memory: 512M  # Reduced for lightweight
+          cpus: '1.0'  # Increased for enhanced features
+          memory: 1G   # Increased for enhanced features
         reservations:
-          cpus: '0.1'
-          memory: 256M
+          cpus: '0.2'
+          memory: 512M
