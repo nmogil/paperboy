@@ -26,19 +26,29 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4000
     ) -> str:
-        """Make LLM call with retry logic and performance monitoring."""
+        """Make LLM call with retry logic and performance monitoring using Responses API."""
         start_time = time.time()
         try:
-            response = await self.client.chat.completions.create(
+            # Format input for Responses API - combine system and user prompts
+            input_content = f"{system_prompt}\n\n{user_prompt}"
+            
+            response = await self.client.responses.create(
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=temperature,
-                max_tokens=max_tokens
+                input=input_content,
+                temperature=temperature
             )
-            content = response.choices[0].message.content
+            
+            # Extract content from Responses API format
+            if response.output and len(response.output) > 0:
+                output_item = response.output[0]
+                if hasattr(output_item, 'content') and len(output_item.content) > 0:
+                    content = output_item.content[0].text
+                else:
+                    logfire.error("Unexpected response format: no content in output")
+                    raise ValueError("No content in response output")
+            else:
+                logfire.error("Unexpected response format: no output")
+                raise ValueError("No output in response")
 
             if content.startswith("```json"):
                 content = content[7:]
