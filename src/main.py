@@ -215,7 +215,7 @@ async def generate_digest(
     request: GenerateDigestRequest,
     background_tasks: BackgroundTasks
 ) -> GenerateDigestResponse:
-    """Generate a personalized research digest with enhanced reliability."""
+    """Generate a personalized newsletter digest with enhanced reliability."""
     # Check if we're shutting down
     if SHUTDOWN_HANDLER and SHUTDOWN_HANDLER.is_shutting_down():
         raise HTTPException(status_code=503, detail="Service is shutting down")

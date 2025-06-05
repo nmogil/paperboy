@@ -5,6 +5,7 @@ from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 import logfire
 from pydantic import BaseModel, Field, ValidationError
+from datetime import datetime
 
 from .config import settings
 from .models import RankedArticle, ArticleAnalysis
@@ -510,3 +511,353 @@ Article Content (first 8000 chars):
             return "Skim the methodology section"
         else:
             return "Save for later reference"
+
+    async def generate_html_digest(
+        self,
+        articles: List[Dict[str, Any]],
+        user_info: Dict[str, Any],
+        papers_count: int,
+        news_count: int,
+        total_time: int
+    ) -> str:
+        """Generate HTML digest using structured outputs with fallback to template generation."""
+        
+        # Import here to avoid circular dependency
+        from .digest_service_enhanced import DigestHTML, TLDRItem, ArticleSection, QuickScanItem
+        
+        current_date = datetime.now().strftime("%A, %B %d, %Y")
+        user_name = user_info.get('name', 'User')
+        user_title = user_info.get('title', 'Researcher')
+        user_goals = user_info.get('goals', 'AI Research')
+
+        system_prompt = f"""You are an expert newsletter designer who creates clean, readable HTML digests for researchers.
+
+You must create a New York Times-style newsletter digest using the provided articles data. 
+
+DESIGN REQUIREMENTS:
+- Simple, newspaper-style layout optimized for email clients
+- Georgia serif font for readability  
+- Black text on white background
+- Minimal CSS that works in email clients
+- Clear hierarchy with simple borders and spacing
+
+CONTENT REQUIREMENTS:
+- header_title should be "📰 PAPERBOY DIGEST" (with newspaper emoji)
+- Create engaging TL;DR highlights (3-5 items max)
+- Categorize articles by relevance: HIGH PRIORITY (90-100), IMPORTANT (70-89), NOTEWORTHY (50-69)
+- For priority_section_title use: "Directly Relevant to Your Work"
+- For interesting_section_title use: "Expand Your Knowledge"  
+- Include quick scan section for lower priority items
+- For quick scan icons: use "📰" for news articles and "📄" for research papers
+- Use simple language, avoid jargon
+- Focus on practical relevance to the user's work
+
+USER PROFILE:
+- Name: {user_name}
+- Title: {user_title}  
+- Research Focus: {user_goals}
+
+Return structured data that will be used to generate the final HTML which will be sent to the user via email. Be specific and actionable in your content."""
+
+        user_prompt = f"""Generate structured content for a research digest with these stats:
+- {papers_count} Papers
+- {news_count} News Articles  
+- {total_time} minutes reading time
+- Date: {current_date}
+
+Articles data:
+{json.dumps(articles, indent=2)}
+
+Create engaging, readable content that helps the reader quickly understand what's relevant to their work."""
+
+        try:
+            # Try structured output first
+            logfire.info("Attempting HTML generation with structured outputs")
+            
+            response = await self._call_llm_structured(
+                system_prompt,
+                user_prompt,
+                DigestHTML,
+                temperature=0.3,
+                fallback_to_manual=False  # We have our own fallback
+            )
+            
+            if isinstance(response, DigestHTML):
+                logfire.info("Successfully generated structured HTML content")
+                # Convert structured response to HTML
+                return self._render_html_from_structured(response)
+            else:
+                logfire.warning("Unexpected structured output format for HTML generation")
+                return None
+                
+        except Exception as e:
+            logfire.warning(f"Structured HTML generation failed: {str(e)}")
+            return None
+
+    def _render_html_from_structured(self, digest_data: Any) -> str:
+        """Render the final HTML from structured digest data."""
+        from .digest_service_enhanced import DigestHTML
+        
+        try:
+            # Ensure we have the right type
+            if not isinstance(digest_data, DigestHTML):
+                raise ValueError("Invalid digest data type")
+            
+            # Build the HTML using the structured data
+            html_parts = []
+            
+            # Header
+            html_parts.append(f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{digest_data.header_title}</title>
+    <style>
+        body {{
+            font-family: Georgia, Times, serif;
+            line-height: 1.6;
+            color: #000000;
+            background-color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }}
+        
+        h1 {{
+            font-size: 28px;
+            font-weight: bold;
+            margin: 0 0 5px 0;
+            color: #000000;
+            text-align: center;
+            border-bottom: 3px solid #000000;
+            padding-bottom: 10px;
+        }}
+        
+        h2 {{
+            font-size: 18px;
+            font-weight: bold;
+            margin: 30px 0 15px 0;
+            color: #000000;
+            border-bottom: 1px solid #cccccc;
+            padding-bottom: 5px;
+        }}
+        
+        h3 {{
+            font-size: 16px;
+            font-weight: bold;
+            margin: 20px 0 10px 0;
+            color: #000000;
+        }}
+        
+        p {{
+            margin: 10px 0;
+            font-size: 14px;
+        }}
+        
+        .header {{
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #000000;
+        }}
+        
+        .date {{
+            font-size: 12px;
+            color: #666666;
+            margin: 5px 0;
+        }}
+        
+        .subtitle {{
+            font-size: 14px;
+            color: #666666;
+            margin: 10px 0;
+        }}
+        
+        .stats {{
+            font-size: 12px;
+            color: #666666;
+            margin: 15px 0;
+        }}
+        
+        .article {{
+            margin: 25px 0;
+            padding: 15px 0;
+            border-bottom: 1px solid #eeeeee;
+        }}
+        
+        .article-title {{
+            font-size: 16px;
+            font-weight: bold;
+            margin: 0 0 8px 0;
+            color: #000000;
+        }}
+        
+        .article-meta {{
+            font-size: 11px;
+            color: #666666;
+            margin: 5px 0;
+        }}
+        
+        .summary {{
+            font-size: 14px;
+            margin: 10px 0;
+            color: #333333;
+        }}
+        
+        .relevance {{
+            font-size: 13px;
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-left: 3px solid #cccccc;
+        }}
+        
+        .actions {{
+            margin: 15px 0;
+        }}
+        
+        .actions a {{
+            color: #000000;
+            text-decoration: underline;
+            font-size: 13px;
+            margin-right: 15px;
+        }}
+        
+        .section {{
+            margin: 30px 0;
+        }}
+        
+        .quick-item {{
+            margin: 8px 0;
+            font-size: 13px;
+            padding: 5px 0;
+        }}
+        
+        .footer {{
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #cccccc;
+            text-align: center;
+            font-size: 12px;
+            color: #666666;
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{digest_data.header_title}</h1>
+        <div class="date">{digest_data.header_date}</div>
+        <div class="subtitle">{digest_data.header_subtitle}</div>
+        <div class="stats">{digest_data.header_stats}</div>
+    </div>
+""")
+            
+            # TL;DR Section
+            if digest_data.tldr_items:
+                html_parts.append("""
+    <div class="section">
+        <h2>TODAY'S HIGHLIGHTS</h2>""")
+                
+                for item in digest_data.tldr_items:
+                    html_parts.append(f"        • {item.summary}<br>")
+                
+                html_parts.append("    </div>")
+            
+            # Priority Articles Section
+            if digest_data.priority_articles:
+                html_parts.append(f"""
+    <div class="section">
+        <h2>{digest_data.priority_section_title.upper()}</h2>""")
+                
+                for article in digest_data.priority_articles:
+                    pdf_link = f'<a href="{article.pdf_url}">Download PDF</a>' if article.pdf_url and article.article_type != "NEWS" else ""
+                    
+                    html_parts.append(f"""
+        <div class="article">
+            <div class="article-title">{article.title}</div>
+            <div class="article-meta">{article.article_type} • {article.priority} • Score: {article.score}/100</div>
+            
+            <div class="summary">{article.summary}</div>
+            
+            <div class="relevance">
+                <strong>Why this matters:</strong> {article.relevance}
+            </div>
+            
+            <div class="summary">
+                <strong>Key insight:</strong> {article.key_insight}
+            </div>
+            
+            <div class="actions">
+                <a href="{article.abstract_url}">Read Article</a>
+                {pdf_link}
+            </div>
+        </div>""")
+                
+                html_parts.append("    </div>")
+            
+            # Interesting Articles Section  
+            if digest_data.interesting_articles:
+                html_parts.append(f"""
+    <div class="section">
+        <h2>{digest_data.interesting_section_title.upper()}</h2>""")
+                
+                for article in digest_data.interesting_articles:
+                    pdf_link = f'<a href="{article.pdf_url}">Download PDF</a>' if article.pdf_url and article.article_type != "NEWS" else ""
+                    
+                    html_parts.append(f"""
+        <div class="article">
+            <div class="article-title">{article.title}</div>
+            <div class="article-meta">{article.article_type} • {article.priority} • Score: {article.score}/100</div>
+            
+            <div class="summary">{article.summary}</div>
+            
+            <div class="relevance">
+                <strong>Why this matters:</strong> {article.relevance}
+            </div>
+            
+            <div class="summary">
+                <strong>Key insight:</strong> {article.key_insight}
+            </div>
+            
+            <div class="actions">
+                <a href="{article.abstract_url}">Read Article</a>
+                {pdf_link}
+            </div>
+                </div>""")
+                
+                html_parts.append("    </div>")
+            
+            # Quick Scan Section
+            if digest_data.quick_scan_items:
+                html_parts.append("""
+    <div class="section">
+        <h2>QUICK SCAN</h2>""")
+                
+                for item in digest_data.quick_scan_items:
+                    # Ensure proper emoji display
+                    icon = "📰" if "news" in item.icon.lower() or "📰" in item.icon else "📄"
+                    html_parts.append(f"""
+        <div class="quick-item">
+            {icon} <strong>{item.title}</strong> ({item.score}/100) 
+            <a href="{item.url}">Read →</a>
+        </div>""")
+                
+                html_parts.append("    </div>")
+            
+            # Footer
+            html_parts.append(f"""
+    <div class="footer">
+        <p><strong>{digest_data.footer_impact}</strong></p>
+        <p>{digest_data.footer_credits}</p>
+    </div>
+</body>
+</html>""")
+            
+            return ''.join(html_parts)
+            
+        except Exception as e:
+            logfire.error(f"Error rendering HTML from structured data: {e}")
+            raise
