@@ -727,7 +727,7 @@ News Articles to rank:
             raise
 
     def _generate_html(self, articles: List[ArticleAnalysis], user_info: Dict[str, Any]) -> str:
-        """Generate simplified, scannable HTML digest."""
+        """Generate simple, newspaper-style HTML digest."""
         try:
             # Generate TL;DR summary
             tldr_items = self._generate_tldr_summary(articles, user_info)
@@ -807,11 +807,12 @@ News Articles to rank:
         return fallback_html
 
     def _generate_html_header(self, user_info: Dict[str, Any], papers_count: int, news_count: int, total_time: int) -> str:
-        """Generate mobile-first HTML header with simplified styling."""
+        """Generate simple, newspaper-style HTML header optimized for email clients."""
         try:
-            current_date = datetime.now().strftime("%B %d, %Y")
+            current_date = datetime.now().strftime("%A, %B %d, %Y")
             user_name = user_info.get('name', 'User')
             user_title = user_info.get('title', 'Researcher')
+            user_goals = user_info.get('goals', 'AI Research')
 
             return f"""
 <!DOCTYPE html>
@@ -819,417 +820,314 @@ News Articles to rank:
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your AI Digest - {current_date}</title>
+    <title>Your Research Digest - {current_date}</title>
     <style>
-        /* Mobile-first CSS with 600px max-width */
-        * {{ box-sizing: border-box; }}
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: Georgia, Times, serif;
+            line-height: 1.6;
+            color: #000000;
+            background-color: #ffffff;
+            margin: 0;
+            padding: 20px;
             max-width: 600px;
             margin: 0 auto;
-            padding: 20px;
-            line-height: 1.6;
-            color: #333;
-            background: #f8f9fa;
         }}
-
-        /* Header */
-        .header {{
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px 20px;
-            border-radius: 12px;
-            margin-bottom: 30px;
+        
+        h1 {{
+            font-size: 28px;
+            font-weight: bold;
+            margin: 0 0 5px 0;
+            color: #000000;
             text-align: center;
-        }}
-        .header h1 {{
-            margin: 0 0 10px 0;
-            font-size: 1.8em;
-            font-weight: 600;
-        }}
-        .header-meta {{
-            font-size: 0.95em;
-            opacity: 0.9;
-        }}
-
-        /* Stats */
-        .stats {{
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            margin-top: 15px;
-            flex-wrap: wrap;
-        }}
-        .stat-item {{
-            background: rgba(255,255,255,0.2);
-            padding: 8px 12px;
-            border-radius: 16px;
-            font-size: 0.85em;
-        }}
-
-        /* TL;DR Section */
-        .tldr-section {{
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            margin-bottom: 30px;
-            border-left: 4px solid #3498db;
-        }}
-        .tldr-section h2 {{
-            margin: 0 0 15px 0;
-            color: #2c3e50;
-            font-size: 1.3em;
-        }}
-        .tldr-list {{
-            margin: 0;
-            padding-left: 20px;
-        }}
-        .tldr-list li {{
-            margin-bottom: 8px;
-            line-height: 1.5;
-        }}
-        .tldr-meta {{
-            margin-top: 15px;
-            font-size: 0.85em;
-            color: #7f8c8d;
-            text-align: center;
-        }}
-
-        /* Content sections */
-        .content-section {{
-            margin-bottom: 40px;
-        }}
-        .section-header {{
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 20px;
+            border-bottom: 3px solid #000000;
             padding-bottom: 10px;
-            border-bottom: 2px solid #3498db;
         }}
-        .section-header h2 {{
-            margin: 0;
-            color: #2c3e50;
-            font-size: 1.4em;
+        
+        h2 {{
+            font-size: 18px;
+            font-weight: bold;
+            margin: 30px 0 15px 0;
+            color: #000000;
+            border-bottom: 1px solid #cccccc;
+            padding-bottom: 5px;
         }}
-        .section-count {{
-            background: #ecf0f1;
-            color: #7f8c8d;
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 0.8em;
+        
+        h3 {{
+            font-size: 16px;
+            font-weight: bold;
+            margin: 20px 0 10px 0;
+            color: #000000;
         }}
-
-        /* Article cards */
-        .articles-grid {{
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
+        
+        p {{
+            margin: 10px 0;
+            font-size: 14px;
         }}
-        .article {{
-            background: white;
-            border: 1px solid #e1e8ed;
-            border-radius: 12px;
-            padding: 20px;
-            position: relative;
-        }}
-
-        /* Priority indicators */
-        .priority-indicator {{
-            position: absolute;
-            top: 15px;
-            right: 15px;
-            padding: 4px 8px;
-            border-radius: 10px;
-            font-size: 0.7em;
-            font-weight: 600;
-            text-transform: uppercase;
-        }}
-        .priority-indicator.high {{
-            background: #e74c3c;
-            color: white;
-        }}
-        .priority-indicator.medium {{
-            background: #f39c12;
-            color: white;
-        }}
-
-        /* Article content */
-        .article h3 {{
-            margin: 0 50px 15px 0;
-            color: #2c3e50;
-            font-size: 1.2em;
-            line-height: 1.4;
-        }}
-        .one-liner {{
-            margin: 0 0 15px 0;
-            font-size: 0.95em;
-            color: #555;
-        }}
-        .personal-relevance, .key-takeaway {{
-            margin: 15px 0;
-            padding: 12px;
-            background: #f8f9fa;
-            border-radius: 8px;
-            font-size: 0.9em;
-        }}
-        .personal-relevance strong, .key-takeaway strong {{
-            color: #3498db;
-        }}
-
-        /* Actions */
-        .actions {{
-            margin-top: 15px;
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }}
-        .primary-action, .secondary-action {{
-            padding: 8px 16px;
-            border-radius: 8px;
-            text-decoration: none;
-            font-size: 0.85em;
-            font-weight: 500;
-        }}
-        .primary-action {{
-            background: #3498db;
-            color: white;
-        }}
-        .secondary-action {{
-            background: #ecf0f1;
-            color: #7f8c8d;
-        }}
-
-        /* Quick scan */
-        .quick-scan {{
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }}
-        .quick-scan li {{
-            padding: 12px;
-            margin-bottom: 8px;
-            background: white;
-            border-radius: 8px;
-            font-size: 0.9em;
-        }}
-        .quick-scan a {{
-            color: #3498db;
-            text-decoration: none;
-            font-weight: 500;
-        }}
-
-        /* Footer */
-        .footer {{
+        
+        .header {{
             text-align: center;
-            color: #7f8c8d;
-            font-size: 0.85em;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #000000;
+        }}
+        
+        .date {{
+            font-size: 12px;
+            color: #666666;
+            margin: 5px 0;
+        }}
+        
+        .subtitle {{
+            font-size: 14px;
+            color: #666666;
+            margin: 10px 0;
+        }}
+        
+        .stats {{
+            font-size: 12px;
+            color: #666666;
+            margin: 15px 0;
+        }}
+        
+        .article {{
+            margin: 25px 0;
+            padding: 15px 0;
+            border-bottom: 1px solid #eeeeee;
+        }}
+        
+        .article-title {{
+            font-size: 16px;
+            font-weight: bold;
+            margin: 0 0 8px 0;
+            color: #000000;
+        }}
+        
+        .article-meta {{
+            font-size: 11px;
+            color: #666666;
+            margin: 5px 0;
+        }}
+        
+        .summary {{
+            font-size: 14px;
+            margin: 10px 0;
+            color: #333333;
+        }}
+        
+        .relevance {{
+            font-size: 13px;
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-left: 3px solid #cccccc;
+        }}
+        
+        .actions {{
+            margin: 15px 0;
+        }}
+        
+        .actions a {{
+            color: #000000;
+            text-decoration: underline;
+            font-size: 13px;
+            margin-right: 15px;
+        }}
+        
+        .section {{
+            margin: 30px 0;
+        }}
+        
+        .quick-item {{
+            margin: 8px 0;
+            font-size: 13px;
+            padding: 5px 0;
+        }}
+        
+        .footer {{
             margin-top: 40px;
-            padding: 20px;
-            border-top: 1px solid #ecf0f1;
+            padding-top: 20px;
+            border-top: 1px solid #cccccc;
+            text-align: center;
+            font-size: 12px;
+            color: #666666;
         }}
-        .footer .stats {{
-            color: #3498db;
-            font-weight: 600;
-        }}
-
-        /* Mobile breakpoints */
-        @media (max-width: 480px) {{
-            body {{ padding: 15px; }}
-            .header {{ padding: 20px 15px; }}
-            .header h1 {{ font-size: 1.6em; }}
-            .stats {{ gap: 15px; }}
-            .article {{ padding: 15px; }}
-            .article h3 {{ margin-right: 40px; font-size: 1.1em; }}
-            .section-header {{ flex-direction: column; align-items: flex-start; gap: 8px; }}
+        
+        .score {{
+            font-size: 11px;
+            color: #666666;
+            font-weight: normal;
         }}
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>🚀 Your AI Digest</h1>
-        <div class="header-meta">
-            <p>Hello <strong>{user_name}</strong> • {current_date}</p>
-            <p><em>{user_title}</em></p>
-        </div>
-        <div class="stats">
-            <span class="stat-item">📄 {papers_count} Papers</span>
-            <span class="stat-item">📰 {news_count} News</span>
-            <span class="stat-item">⏱ {total_time}min read</span>
-        </div>
+        <h1>📰 RESEARCH DIGEST</h1>
+        <div class="date">{current_date}</div>
+        <div class="subtitle">Personalized for {user_name}, {user_title}</div>
+        <div class="stats">{papers_count} Papers • {news_count} News Articles • {total_time} min read</div>
     </div>
 """
         except Exception as e:
-            logfire.error(f"Error generating HTML header: {e}")
-            # Simple fallback header
+            logfire.error(f"Error generating simple HTML header: {e}")
             return f"""
 <!DOCTYPE html>
 <html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your AI Digest</title>
-    <style>
-        body {{ font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .header {{ background: #3498db; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>Your AI Digest</h1>
-        <p>Hello {user_info.get('name', 'User')}</p>
-    </div>
+<head><meta charset="utf-8"><title>Research Digest</title></head>
+<body style="font-family: Georgia, serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+<h1 style="text-align: center; border-bottom: 2px solid black;">📰 RESEARCH DIGEST</h1>
+<p style="text-align: center; color: #666;">{datetime.now().strftime('%B %d, %Y')} • {user_info.get('name', 'User')}</p>
 """
 
     def _generate_tldr_section(self, tldr_items: List[Dict[str, str]], total_items: int, total_time: int) -> str:
-        """Generate the TL;DR executive summary section."""
+        """Generate simple executive summary section."""
         if not tldr_items:
             return ""
 
         try:
-            bullets = "\n".join([f"<li>{item['summary']}</li>" for item in tldr_items])
-            user_focus = self._get_user_focus_area()
-
+            bullets = []
+            for item in tldr_items:
+                bullets.append(f"• {item['summary']}")
+            
             return f"""
-    <div class="tldr-section">
-        <h2>📌 Your 2-Minute Briefing</h2>
-        <ul class="tldr-list">
-            {bullets}
-        </ul>
-        <p class="tldr-meta">
-            {total_items} items • {total_time} min total read time •
-            Tailored for {user_focus}
-        </p>
+    <div class="section">
+        <h2>TODAY'S HIGHLIGHTS</h2>
+        {"<br>".join(bullets)}
     </div>
 """
         except Exception as e:
-            logfire.error(f"Error generating TL;DR section: {e}")
+            logfire.error(f"Error generating simple TL;DR section: {e}")
             return ""
 
     def _generate_priority_section(self, articles: List[ArticleAnalysis], section_title: str) -> str:
-        """Generate a priority section with simplified article cards."""
+        """Generate simple article section."""
         if not articles:
             return ""
 
         try:
-            cards = []
-            for idx, article in enumerate(articles[:3]):  # Limit to 3 per section
-                priority = "high" if article.relevance_score >= 90 else "medium"
-                priority_text = "Must Read" if priority == "high" else "Important"
+            # Clean up section title
+            clean_title = section_title.replace("🎯 ", "").replace("📚 ", "").replace("🔬 ", "")
+            
+            articles_html = []
+            for article in articles[:4]:  # Limit to 4 articles per section
+                
+                # Determine priority text
+                if article.relevance_score >= 90:
+                    priority = "HIGH PRIORITY"
+                elif article.relevance_score >= 80:
+                    priority = "IMPORTANT"
+                else:
+                    priority = "NOTEWORTHY"
 
-                # Create one-liner summary
+                # Get article type
+                article_type = "NEWS" if article.type == ContentType.NEWS else "RESEARCH"
+                
+                # Create summary
                 if article.type == ContentType.NEWS:
-                    one_liner = self._simplify_content(article.summary.split('.')[0], 100)
+                    summary = self._simplify_content(article.summary, 150)
                 else:
-                    one_liner = self._simplify_content(article.importance.split('.')[0], 100)
+                    summary = self._simplify_content(article.importance, 150)
 
-                # Simplify personal relevance
-                relevance = self._simplify_content(article.relevance_to_user, 150)
+                # Get relevance
+                relevance = self._simplify_content(article.relevance_to_user, 200)
 
-                # Get primary action text
-                action_text = "Read 3-min summary" if article.type == ContentType.NEWS else "Get key insights"
-
-                # Extract key takeaway
+                # Key insight
                 if article.key_findings and len(article.key_findings) > 0:
-                    key_takeaway = self._simplify_content(article.key_findings[0], 120)
+                    key_insight = self._simplify_content(article.key_findings[0], 150)
                 else:
-                    key_takeaway = self._simplify_content(article.recommended_action, 120)
+                    key_insight = self._simplify_content(article.recommended_action, 150)
 
-                # Ensure all URLs are strings
+                # URLs
                 abstract_url = str(article.abstract_url) if article.abstract_url else "#"
                 pdf_url = str(article.pdf_url) if article.pdf_url else ""
 
-                card_html = f"""
-        <div class="article">
-            <div class="priority-indicator {priority}">{priority_text}</div>
-            <h3>{article.title}</h3>
-            <p class="one-liner">{one_liner}</p>
-
-            <div class="personal-relevance">
-                <strong>Why this matters for you:</strong> {relevance}
-            </div>
-
-            <div class="key-takeaway">
-                <strong>Key insight:</strong> {key_takeaway}
-            </div>
-
-            <div class="actions article-links">
-                <a href="{abstract_url}" class="primary-action">{action_text}</a>
-                {f'<a href="{pdf_url}" class="secondary-action">Full paper</a>' if article.type != ContentType.NEWS and pdf_url else ''}
-            </div>
+                article_html = f"""
+    <div class="article">
+        <div class="article-title">{article.title}</div>
+        <div class="article-meta">{article_type} • {priority} • Score: {article.relevance_score}/100</div>
+        
+        <div class="summary">{summary}</div>
+        
+        <div class="relevance">
+            <strong>Why this matters:</strong> {relevance}
         </div>
-"""
-                cards.append(card_html)
-
-            return f"""
-    <div class="content-section">
-        <div class="section-header">
-            <h2>{section_title}</h2>
-            <span class="section-count">{len(articles)} items</span>
+        
+        <div class="summary">
+            <strong>Key insight:</strong> {key_insight}
         </div>
-        <div class="articles-grid">
-            {''.join(cards)}
+        
+        <div class="actions">
+            <a href="{abstract_url}">Read Article</a>
+            {f'<a href="{pdf_url}">Download PDF</a>' if pdf_url and article.type != ContentType.NEWS else ''}
         </div>
     </div>
 """
+                articles_html.append(article_html)
+
+            return f"""
+    <div class="section">
+        <h2>{clean_title.upper()}</h2>
+        {''.join(articles_html)}
+    </div>
+"""
         except Exception as e:
-            logfire.error(f"Error generating priority section: {e}")
+            logfire.error(f"Error generating simple priority section: {e}")
             return ""
 
     def _generate_quick_scan_section(self, articles: List[ArticleAnalysis]) -> str:
-        """Generate quick scan section for lower priority items."""
+        """Generate simple quick scan section."""
         if not articles:
             return ""
 
         try:
             items = []
-            for article in articles[:5]:  # Limit to 5 items
-                icon = "📰" if article.type == ContentType.NEWS else "📄"
-                # Ultra-short summary
-                summary = self._simplify_content(article.summary.split('.')[0], 80)
-                title_truncated = article.title[:50] + '...' if len(article.title) > 50 else article.title
-                abstract_url = str(article.abstract_url) if article.abstract_url else "#"
-
+            for article in articles[:8]:  # Show more items in quick scan
+                # Truncate title
+                title = article.title
+                if len(title) > 80:
+                    title = title[:77] + "..."
+                
+                # Get type and score
+                article_type = "📰" if article.type == ContentType.NEWS else "📄"
+                score = f"({article.relevance_score}/100)"
+                
+                # URL
+                url = str(article.abstract_url) if article.abstract_url else "#"
+                
                 item_html = f"""
-        <li>
-            {icon} <strong>{title_truncated}</strong> -
-            {summary}
-            <a href="{abstract_url}">→</a>
-        </li>
+        <div class="quick-item">
+            {article_type} <strong>{title}</strong> {score} 
+            <a href="{url}">Read →</a>
+        </div>
 """
                 items.append(item_html)
 
             return f"""
-    <div class="content-section">
-        <h2 class="section-header">🔍 Quick Scan</h2>
-        <ul class="quick-scan">
-            {''.join(items)}
-        </ul>
+    <div class="section">
+        <h2>QUICK SCAN</h2>
+        {''.join(items)}
     </div>
 """
         except Exception as e:
-            logfire.error(f"Error generating quick scan section: {e}")
+            logfire.error(f"Error generating simple quick scan section: {e}")
             return ""
 
     def _generate_html_footer(self, total_items: int) -> str:
-        """Generate simplified footer with stats."""
+        """Generate simple footer."""
         try:
-            papers_reviewed = total_items * 4  # Rough estimate
-            directly_applicable = int(total_items * 0.4)
+            papers_processed = total_items * 4
+            time_saved = max(30, total_items * 15)
 
             return f"""
     <div class="footer">
-        <p><strong>Your weekly impact:</strong>
-        <span class="stats">{papers_reviewed}</span> papers reviewed •
-        <span class="stats">{total_items}</span> selected for you •
-        <span class="stats">{directly_applicable}</span> directly applicable</p>
-        <p>Paperboy AI • Saving you hours of research weekly</p>
+        <p><strong>Your Research Impact This Week</strong></p>
+        <p>{papers_processed}+ papers processed • {total_items} selected for you • ~{time_saved} minutes saved</p>
+        <p>Generated by <strong>Paperboy AI</strong> • Accelerating research through intelligent curation</p>
     </div>
 </body>
 </html>
 """
         except Exception as e:
-            logfire.error(f"Error generating footer: {e}")
+            logfire.error(f"Error generating simple footer: {e}")
             return "</body></html>"
 
     def _get_user_focus_area(self) -> str:

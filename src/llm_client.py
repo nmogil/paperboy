@@ -1,12 +1,32 @@
 import json
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Union
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 import logfire
+from pydantic import BaseModel, Field, ValidationError
 
 from .config import settings
 from .models import RankedArticle, ArticleAnalysis
+
+# Structured output schemas for ranking
+class ArticleRanking(BaseModel):
+    """Schema for individual ranked article in structured output."""
+    title: str = Field(description="Paper or article title")
+    score: int = Field(ge=0, le=100, description="Relevance score 0-100")
+    reasoning: str = Field(description="Brief explanation of relevance")
+    abstract_url: str = Field(description="Article URL")
+    authors: List[str] = Field(description="List of authors")
+    subject: str = Field(description="Subject category or 'news'")
+    html_url: Optional[str] = Field(default=None, description="HTML URL if available")
+    pdf_url: Optional[str] = Field(default=None, description="PDF URL if available")
+    type: Optional[str] = Field(default=None, description="Type: 'paper' or 'news'")
+    source: Optional[str] = Field(default=None, description="News source name for news articles")
+    published_at: Optional[str] = Field(default=None, description="Publication timestamp for news")
+
+class RankingResponse(BaseModel):
+    """Schema for ranking response containing list of ranked articles."""
+    articles: List[ArticleRanking] = Field(min_items=1, max_items=20, description="List of ranked articles")
 
 class LLMClient:
     """Simple LLM client with retry logic and structured outputs."""
@@ -68,61 +88,100 @@ class LLMClient:
                 "temperature": temperature
             })
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    async def _call_llm_structured(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        response_model: BaseModel,
+        temperature: float = 0.3,
+        fallback_to_manual: bool = True
+    ) -> Union[BaseModel, List[Dict[str, Any]]]:
+        """Make structured LLM call with Pydantic validation and fallback to manual parsing."""
+        start_time = time.time()
+        
+        try:
+            # Try structured output with Responses API
+            logfire.info(f"Attempting structured output with model: {response_model.__name__}")
+            
+            response = await self.client.responses.parse(
+                model=self.model,
+                instructions=system_prompt,
+                input=user_prompt,
+                text_format=response_model,
+                temperature=temperature
+            )
+            
+            # Access the parsed Pydantic object directly
+            if hasattr(response, 'output_parsed') and response.output_parsed:
+                logfire.info(f"Successfully received structured output: {type(response.output_parsed)}")
+                return response.output_parsed
+            else:
+                raise ValueError("No parsed output in structured response")
+                
+        except Exception as e:
+            logfire.warning(f"Structured output failed: {str(e)}")
+            
+            if fallback_to_manual:
+                logfire.info("Falling back to manual JSON parsing")
+                try:
+                    # Fallback to manual parsing
+                    text_response = await self._call_llm(system_prompt, user_prompt, temperature)
+                    
+                    # Attempt to parse as JSON and convert to expected format
+                    data = json.loads(text_response)
+                    
+                    # Handle different response formats for fallback
+                    if isinstance(data, dict) and 'articles' in data:
+                        return data['articles']
+                    elif isinstance(data, list):
+                        return data
+                    else:
+                        logfire.error(f"Unexpected fallback response format: {type(data)}")
+                        return []
+                        
+                except Exception as fallback_error:
+                    logfire.error(f"Manual parsing fallback also failed: {str(fallback_error)}")
+                    raise ValueError(f"Both structured output and manual parsing failed: {str(e)} | {str(fallback_error)}")
+            else:
+                raise
+        finally:
+            duration = time.time() - start_time
+            logfire.info(f"Structured LLM call completed", extra={
+                "duration": duration,
+                "model": self.model,
+                "response_model": response_model.__name__,
+                "temperature": temperature
+            })
+
     async def rank_articles(
         self,
         articles: List[Dict[str, Any]],
         user_info: Dict[str, Any],
         top_n: int
     ) -> List[RankedArticle]:
-        """Rank articles based on user profile."""
+        """Rank articles based on user profile using structured outputs."""
         system_prompt = f"""You are an expert research paper analyst. Your task is to rank academic papers based on their relevance to a user's research interests and background.
 
 Below is a list of articles in JSON format. Select the {top_n} most relevant articles based on the user profile.
 
-Your response MUST be a valid JSON array (starting with [ and ending with ]) containing EXACTLY {top_n} selected articles. Each article object must include:
-- title: Paper title (string)
-- score: Relevance score 0-100 (integer) - use this field name!
-- reasoning: Brief explanation of relevance (string) - use this field name!
-- abstract_url: The paper's abstract URL (string)
-- authors: List of authors (array of strings)  
-- subject: Subject category (string)
-- html_url: HTML URL if available (string, optional)
-- pdf_url: PDF URL (string)
-
-Example format:
-[
-  {{
-    "title": "Paper Title",
-    "score": 85,
-    "reasoning": "This paper is relevant because...",
-    "abstract_url": "https://arxiv.org/abs/...",
-    "authors": ["Author 1", "Author 2"],
-    "subject": "cs.AI",
-    "html_url": "https://arxiv.org/html/...",
-    "pdf_url": "https://arxiv.org/pdf/..."
-  }},
-  {{
-    "title": "Another Paper",
-    "score": 78,
-    "reasoning": "This is relevant because...",
-    "abstract_url": "https://arxiv.org/abs/...",
-    "authors": ["Author 3"],
-    "subject": "cs.LG",
-    "html_url": "https://arxiv.org/html/...",
-    "pdf_url": "https://arxiv.org/pdf/..."
-  }}
-]
-
-Return ONLY the JSON array, no other text. 
+You must return a structured response with an "articles" field containing exactly {top_n} selected articles. Each article must include:
+- title: Paper title
+- score: Relevance score 0-100 (integer)
+- reasoning: Brief explanation of relevance  
+- abstract_url: The paper's abstract URL
+- authors: List of authors
+- subject: Subject category
+- html_url: HTML URL if available (optional)
+- pdf_url: PDF URL (optional)
 
 CRITICAL INSTRUCTIONS:
-1. You MUST select exactly {top_n} articles (not 1, not 3, exactly {top_n})
-2. Return them as a JSON array starting with [ and ending with ]
-3. Even if only 1 article seems highly relevant, find {top_n} articles with varying relevance scores
-4. Do NOT return a single object - always return an array of {top_n} objects
-5. If you return fewer than {top_n} articles, you have failed the task
-
-Your response must start with [ and contain exactly {top_n} article objects."""
+1. You MUST select exactly {top_n} articles (not fewer, not more)
+2. Even if only 1 article seems highly relevant, find {top_n} articles with varying relevance scores
+3. Return them in descending order by relevance score"""
 
         user_prompt = f"""User profile:
 Name: {user_info.get('name', 'Researcher')}
@@ -132,55 +191,57 @@ Research Interests: {user_info.get('goals', ', '.join(user_info.get('research_in
 Articles:
 {json.dumps(articles, indent=2)}"""
 
-        response = await self._call_llm(system_prompt, user_prompt, temperature=0.3)
-
         try:
-            data = json.loads(response)
-            logfire.info(f"LLM response type: {type(data)}, keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}")
-            logfire.info(f"Raw LLM response (first 500 chars): {response[:500].replace('{', '{{').replace('}', '}}')}")
+            # Try structured output first
+            response = await self._call_llm_structured(
+                system_prompt, 
+                user_prompt, 
+                RankingResponse,
+                temperature=0.3
+            )
             
-            # Ensure we have a list - try multiple possible keys
-            if isinstance(data, dict):
-                if 'articles' in data:
-                    data = data['articles']
-                elif 'results' in data:
-                    data = data['results']
-                elif 'ranked_articles' in data:
-                    data = data['ranked_articles']
-                elif 'ranked_papers' in data:
-                    data = data['ranked_papers']
-                elif 'criteria' in data:
-                    data = data['criteria']
-                elif 'result' in data:
-                    data = data['result']
-            
-            if not isinstance(data, list):
-                data_str = str(data)[:200].replace('{', '{{').replace('}', '}}')
-                logfire.error(f"Expected list but got {type(data).__name__}: {data_str}")
-                logfire.error(f"LLM failed to return exactly {top_n} articles as requested. This suggests a prompt/parsing issue.")
+            if isinstance(response, RankingResponse):
+                # Successful structured output
+                logfire.info(f"Structured output success: got {len(response.articles)} articles")
                 
-                if isinstance(data, dict):
-                    logfire.error(f"LLM returned single article instead of {top_n} articles. Wrapping in list as fallback.")
-                    data = [data]
-                else:
-                    logfire.error(f"LLM returned unexpected type: {type(data)}. Using empty list.")
-                    data = []
-
-            merged_articles = self._merge_llm_and_original_articles(data, articles)
-            
-            ranked_articles = []
-            for item in merged_articles[:top_n]:
-                try:
-                    ranked_articles.append(RankedArticle(**item))
-                except Exception as e:
-                    item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
-                    logfire.error(f"Failed to create RankedArticle: {str(e)}, data: {item_str}")
-                    continue
-
-            return ranked_articles
-        except (json.JSONDecodeError, ValueError) as e:
-            logfire.error(f"Failed to parse ranking response: {e}")
-            raise ValueError(f"Invalid LLM response format: {e}")
+                # Convert to list of dicts for merging
+                ranked_data = [article.model_dump() for article in response.articles]
+                merged_articles = self._merge_llm_and_original_articles(ranked_data, articles)
+                
+                ranked_articles = []
+                for item in merged_articles[:top_n]:
+                    try:
+                        ranked_articles.append(RankedArticle(**item))
+                    except Exception as e:
+                        item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
+                        logfire.error(f"Failed to create RankedArticle from structured output: {str(e)}, data: {item_str}")
+                        continue
+                
+                logfire.info(f"Successfully processed {len(ranked_articles)} articles via structured output")
+                return ranked_articles
+                
+            elif isinstance(response, list):
+                # Fallback response as list of dicts
+                logfire.info(f"Fallback response: got {len(response)} articles as list")
+                merged_articles = self._merge_llm_and_original_articles(response, articles)
+                
+                ranked_articles = []
+                for item in merged_articles[:top_n]:
+                    try:
+                        ranked_articles.append(RankedArticle(**item))
+                    except Exception as e:
+                        item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
+                        logfire.error(f"Failed to create RankedArticle from fallback: {str(e)}, data: {item_str}")
+                        continue
+                
+                return ranked_articles
+            else:
+                logfire.error(f"Unexpected response type from structured call: {type(response)}")
+                return []
+                
+        except Exception as e:
+            logfire.error(f"Structured ranking failed completely: {str(e)}")
+            raise ValueError(f"Article ranking failed: {str(e)}")
 
     async def rank_mixed_content(
         self,
@@ -189,7 +250,7 @@ Articles:
         top_n: int,
         weight_recency: bool = True
     ) -> List[RankedArticle]:
-        """Rank mixed content (papers and news) with type-aware scoring."""
+        """Rank mixed content (papers and news) with type-aware scoring using structured outputs."""
         system_prompt = f"""You are an expert analyst who ranks both research papers and news articles based on their relevance to a user's research interests and current work.
 
 Below is a list of content items in JSON format, which may include both academic papers and news articles. Select the {top_n} most relevant items based on the user profile.
@@ -199,56 +260,25 @@ When ranking, consider:
 2. News articles: Focus on industry relevance, emerging trends, company/technology mentions, and timely information
 3. {"Give slightly higher weight to recent news for timely insights" if weight_recency else "Weight all content equally regardless of publication date"}
 
-Your response MUST be a valid JSON array (starting with [ and ending with ]) containing EXACTLY {top_n} selected items. Each item object must include:
-- title: Title (string)
-- score: Relevance score 0-100 (integer) - use this field name!
-- reasoning: Brief explanation of relevance (string) - use this field name!
-- abstract_url: The item's URL (string)
-- authors: List of authors (array of strings)  
-- subject: Subject category or "news" (string)
-- html_url: HTML URL if available (string, optional)
-- pdf_url: PDF URL for papers (string, optional)
-- type: "paper" or "news" (string)
-- source: News source name for news articles (string, optional)
-- published_at: Publication timestamp for news (string, optional)
-
-Example format:
-[
-  {{
-    "title": "Research Paper Title",
-    "score": 85,
-    "reasoning": "This paper is relevant because...",
-    "abstract_url": "https://arxiv.org/abs/...",
-    "authors": ["Author 1", "Author 2"],
-    "subject": "cs.AI",
-    "html_url": "https://arxiv.org/html/...",
-    "pdf_url": "https://arxiv.org/pdf/...",
-    "type": "paper"
-  }},
-  {{
-    "title": "News Article Title",
-    "score": 78,
-    "reasoning": "This news is relevant because...",
-    "abstract_url": "https://news-url.com/article",
-    "authors": ["Reporter Name"],
-    "subject": "news",
-    "type": "news",
-    "source": "TechCrunch",
-    "published_at": "2024-01-15T10:30:00Z"
-  }}
-]
-
-Return ONLY the JSON array, no other text. 
+You must return a structured response with an "articles" field containing exactly {top_n} selected items. Each item must include:
+- title: Title
+- score: Relevance score 0-100 (integer)
+- reasoning: Brief explanation of relevance
+- abstract_url: The item's URL
+- authors: List of authors
+- subject: Subject category or "news"
+- html_url: HTML URL if available (optional)
+- pdf_url: PDF URL for papers (optional)
+- type: "paper" or "news"
+- source: News source name for news articles (optional)
+- published_at: Publication timestamp for news (optional)
 
 CRITICAL INSTRUCTIONS:
-1. You MUST select exactly {top_n} items (not 1, not 3, exactly {top_n})
-2. Return them as a JSON array starting with [ and ending with ]
-3. Mix papers and news based on relevance - don't artificially balance types
-4. Consider the user's role and interests when weighing paper vs news relevance
-5. For news, focus on business/industry impact and emerging trends
-6. If you return fewer than {top_n} items, you have failed the task
-
-Your response must start with [ and contain exactly {top_n} item objects."""
+1. You MUST select exactly {top_n} items (not fewer, not more)
+2. Mix papers and news based on relevance - don't artificially balance types
+3. Consider the user's role and interests when weighing paper vs news relevance
+4. For news, focus on business/industry impact and emerging trends
+5. Return them in descending order by relevance score"""
 
         user_prompt = f"""User profile:
 Name: {user_info.get('name', 'Researcher')}
@@ -258,51 +288,66 @@ Research Interests: {user_info.get('goals', ', '.join(user_info.get('research_in
 Content items:
 {json.dumps(content, indent=2)}"""
 
-        response = await self._call_llm(system_prompt, user_prompt, temperature=0.3)
-
         try:
-            data = json.loads(response)
-            logfire.info(f"Mixed content ranking response type: {type(data)}")
+            # Try structured output first
+            response = await self._call_llm_structured(
+                system_prompt, 
+                user_prompt, 
+                RankingResponse,
+                temperature=0.3
+            )
             
-            # Ensure we have a list
-            if isinstance(data, dict):
-                if 'articles' in data:
-                    data = data['articles']
-                elif 'results' in data:
-                    data = data['results']
-                elif 'ranked_content' in data:
-                    data = data['ranked_content']
-                elif 'items' in data:
-                    data = data['items']
-            
-            if not isinstance(data, list):
-                logfire.error(f"Expected list but got {type(data).__name__} for mixed content ranking")
-                if isinstance(data, dict):
-                    data = [data]
-                else:
-                    data = []
+            if isinstance(response, RankingResponse):
+                # Successful structured output
+                logfire.info(f"Mixed content structured output success: got {len(response.articles)} items")
+                
+                # Convert to list of dicts for merging
+                ranked_data = [article.model_dump() for article in response.articles]
+                merged_content = self._merge_llm_and_original_articles(ranked_data, content)
+                
+                ranked_articles = []
+                for item in merged_content[:top_n]:
+                    try:
+                        # Ensure proper type field
+                        if 'type' not in item:
+                            item['type'] = 'news' if item.get('subject') == 'news' else 'paper'
+                        
+                        ranked_articles.append(RankedArticle(**item))
+                    except Exception as e:
+                        item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
+                        logfire.error(f"Failed to create RankedArticle from mixed structured output: {str(e)}, data: {item_str}")
+                        continue
 
-            merged_content = self._merge_llm_and_original_articles(data, content)
-            
-            ranked_articles = []
-            for item in merged_content[:top_n]:
-                try:
-                    # Ensure proper type field
-                    if 'type' not in item:
-                        item['type'] = 'news' if item.get('subject') == 'news' else 'paper'
-                    
-                    ranked_articles.append(RankedArticle(**item))
-                except Exception as e:
-                    item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
-                    logfire.error(f"Failed to create RankedArticle from mixed content: {str(e)}, data: {item_str}")
-                    continue
+                logfire.info(f"Successfully ranked {len(ranked_articles)} mixed content items via structured output")
+                return ranked_articles
+                
+            elif isinstance(response, list):
+                # Fallback response as list of dicts
+                logfire.info(f"Mixed content fallback response: got {len(response)} items as list")
+                merged_content = self._merge_llm_and_original_articles(response, content)
+                
+                ranked_articles = []
+                for item in merged_content[:top_n]:
+                    try:
+                        # Ensure proper type field
+                        if 'type' not in item:
+                            item['type'] = 'news' if item.get('subject') == 'news' else 'paper'
+                        
+                        ranked_articles.append(RankedArticle(**item))
+                    except Exception as e:
+                        item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
+                        logfire.error(f"Failed to create RankedArticle from mixed fallback: {str(e)}, data: {item_str}")
+                        continue
 
-            logfire.info(f"Successfully ranked {len(ranked_articles)} mixed content items")
-            return ranked_articles
-            
-        except (json.JSONDecodeError, ValueError) as e:
-            logfire.error(f"Failed to parse mixed content ranking response: {e}")
+                return ranked_articles
+            else:
+                logfire.error(f"Unexpected response type from mixed content structured call: {type(response)}")
+                return []
+                
+        except Exception as e:
+            logfire.error(f"Mixed content structured ranking failed: {str(e)}")
             # Fallback to regular ranking
+            logfire.info("Falling back to regular article ranking for mixed content")
             return await self.rank_articles(content, user_info, top_n)
 
     async def analyze_article(
