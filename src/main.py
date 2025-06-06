@@ -230,7 +230,8 @@ async def generate_digest(
                 str(request.callback_url) if request.callback_url else None,
                 request.target_date,
                 request.top_n_articles,
-                request.digest_sources
+                request.digest_sources,
+                request.top_n_news
             )
     else:
         background_tasks.add_task(
@@ -240,7 +241,8 @@ async def generate_digest(
             str(request.callback_url) if request.callback_url else None,
             request.target_date,
             request.top_n_articles,
-            request.digest_sources
+            request.digest_sources,
+            request.top_n_news
         )
 
     return GenerateDigestResponse(

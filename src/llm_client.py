@@ -12,18 +12,30 @@ from .models import RankedArticle, ArticleAnalysis
 
 # Structured output schemas for ranking
 class ArticleRanking(BaseModel):
-    """Schema for individual ranked article in structured output."""
+    """Schema for complete ranked article in structured output - matches RankedArticle structure."""
     title: str = Field(description="Paper or article title")
-    score: int = Field(ge=0, le=100, description="Relevance score 0-100")
-    reasoning: str = Field(description="Brief explanation of relevance")
-    abstract_url: str = Field(description="Article URL")
     authors: List[str] = Field(description="List of authors")
     subject: str = Field(description="Subject category or 'news'")
+    abstract_url: str = Field(description="Article URL")
+    relevance_score: int = Field(ge=0, le=100, description="Relevance score 0-100")
+    score_reason: str = Field(description="Brief explanation of relevance")
+    
+    # Optional URLs
     html_url: Optional[str] = Field(default=None, description="HTML URL if available")
     pdf_url: Optional[str] = Field(default=None, description="PDF URL if available")
-    type: Optional[str] = Field(default=None, description="Type: 'paper' or 'news'")
-    source: Optional[str] = Field(default=None, description="News source name for news articles")
-    published_at: Optional[str] = Field(default=None, description="Publication timestamp for news")
+    
+    # Content type and news-specific fields
+    type: str = Field(default="paper", description="Content type: 'paper' or 'news'")
+    source: Optional[str] = Field(default=None, description="News source name")
+    published_at: Optional[str] = Field(default=None, description="Publication timestamp")
+    url_to_image: Optional[str] = Field(default=None, description="Article image URL")
+    full_content: Optional[str] = Field(default=None, description="Full extracted content")
+    content_preview: Optional[str] = Field(default=None, description="Content preview")
+    extraction_success: Optional[bool] = Field(default=None, description="Whether content extraction succeeded")
+    relevance_score_normalized: Optional[float] = Field(default=None, description="Normalized relevance score")
+    
+    # Preserve any additional metadata fields
+    url: Optional[str] = Field(default=None, description="Alternative URL field for news articles")
 
 class RankingResponse(BaseModel):
     """Schema for ranking response containing list of ranked articles."""
@@ -164,30 +176,45 @@ class LLMClient:
         user_info: Dict[str, Any],
         top_n: int
     ) -> List[RankedArticle]:
-        """Rank articles based on user profile using structured outputs."""
+        """Rank articles based on user profile using structured outputs with complete article data."""
+        
+        # Extract and structure user interests more comprehensively  
+        primary_goals = user_info.get('goals', 'AI Research')
+        user_title = user_info.get('title', 'Researcher')
+        
         system_prompt = f"""You are an expert research paper analyst. Your task is to rank academic papers based on their relevance to a user's research interests and background.
 
-Below is a list of articles in JSON format. Select the {top_n} most relevant articles based on the user profile.
+Below is a list of articles in JSON format with complete metadata. Select the {top_n} most relevant articles based on the user profile.
 
-You must return a structured response with an "articles" field containing exactly {top_n} selected articles. Each article must include:
-- title: Paper title
-- score: Relevance score 0-100 (integer)
-- reasoning: Brief explanation of relevance  
-- abstract_url: The paper's abstract URL
-- authors: List of authors
-- subject: Subject category
-- html_url: HTML URL if available (optional)
-- pdf_url: PDF URL (optional)
+USER PROFILE ANALYSIS:
+- Primary Role: {user_title}
+- Primary research/learning goals: {primary_goals}
+
+RANKING STRATEGY for Research Papers:
+1. **Technical Relevance**: How directly does this paper relate to "{primary_goals}"?
+2. **Methodological Value**: Does this introduce methods/techniques applicable to their work?
+3. **Foundational Knowledge**: Does this advance understanding in their field of interest?
+4. **Practical Applications**: Can insights from this paper be applied in their role as {user_title}?
+5. **Learning Value**: Will this expand their knowledge in meaningful ways?
+
+You must return a structured response with an "articles" field containing exactly {top_n} selected articles. For each article:
+- Return ALL the original fields from the input article
+- Add relevance_score: Relevance score 0-100 (integer)
+- Add score_reason: Brief explanation of relevance that explains WHY this serves their specific goals and role
+- Ensure the article data is complete and unchanged except for the ranking fields
 
 CRITICAL INSTRUCTIONS:
 1. You MUST select exactly {top_n} articles (not fewer, not more)
-2. Even if only 1 article seems highly relevant, find {top_n} articles with varying relevance scores
-3. Return them in descending order by relevance score"""
+2. Preserve ALL original article metadata and fields
+3. Even if only 1 article seems highly relevant, find {top_n} articles with varying relevance scores
+4. Return them in descending order by relevance score
+5. Explain relevance in terms of the user's specific goals: "{primary_goals}"
+6. Do NOT modify any existing fields except to add relevance_score and score_reason"""
 
         user_prompt = f"""User profile:
 Name: {user_info.get('name', 'Researcher')}
-Title: {user_info.get('title', 'Researcher')}
-Research Interests: {user_info.get('goals', ', '.join(user_info.get('research_interests', [])))}
+Title: {user_title}
+Primary Goals: {primary_goals}
 
 Articles:
 {json.dumps(articles, indent=2)}"""
@@ -202,33 +229,42 @@ Articles:
             )
             
             if isinstance(response, RankingResponse):
-                # Successful structured output
-                logfire.info(f"Structured output success: got {len(response.articles)} articles")
-                
-                # Convert to list of dicts for merging
-                ranked_data = [article.model_dump() for article in response.articles]
-                merged_articles = self._merge_llm_and_original_articles(ranked_data, articles)
+                # Successful structured output - articles are already complete
+                logfire.info(f"Structured output success: got {len(response.articles)} complete articles")
                 
                 ranked_articles = []
-                for item in merged_articles[:top_n]:
+                for article in response.articles[:top_n]:
                     try:
-                        ranked_articles.append(RankedArticle(**item))
+                        # Convert ArticleRanking to dict and create RankedArticle
+                        article_data = article.model_dump()
+                        # Ensure we have the required field mappings for RankedArticle
+                        if 'score' in article_data and 'relevance_score' not in article_data:
+                            article_data['relevance_score'] = article_data.pop('score')
+                        if 'reasoning' in article_data and 'score_reason' not in article_data:
+                            article_data['score_reason'] = article_data.pop('reasoning')
+                        
+                        ranked_articles.append(RankedArticle(**article_data))
                     except Exception as e:
-                        item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
+                        item_str = str(article.model_dump())[:200].replace('{', '{{').replace('}', '}}')
                         logfire.error(f"Failed to create RankedArticle from structured output: {str(e)}, data: {item_str}")
                         continue
                 
-                logfire.info(f"Successfully processed {len(ranked_articles)} articles via structured output")
+                logfire.info(f"Successfully processed {len(ranked_articles)} complete articles via structured output")
                 return ranked_articles
                 
             elif isinstance(response, list):
-                # Fallback response as list of dicts
-                logfire.info(f"Fallback response: got {len(response)} articles as list")
-                merged_articles = self._merge_llm_and_original_articles(response, articles)
+                # Fallback response as list of dicts - should already be complete
+                logfire.info(f"Fallback response: got {len(response)} complete articles as list")
                 
                 ranked_articles = []
-                for item in merged_articles[:top_n]:
+                for item in response[:top_n]:
                     try:
+                        # Ensure we have the required field mappings for RankedArticle
+                        if 'score' in item and 'relevance_score' not in item:
+                            item['relevance_score'] = item.pop('score')
+                        if 'reasoning' in item and 'score_reason' not in item:
+                            item['score_reason'] = item.pop('reasoning')
+                        
                         ranked_articles.append(RankedArticle(**item))
                     except Exception as e:
                         item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
@@ -251,40 +287,72 @@ Articles:
         top_n: int,
         weight_recency: bool = True
     ) -> List[RankedArticle]:
-        """Rank mixed content (papers and news) with type-aware scoring using structured outputs."""
+        """Rank mixed content (papers and news) with type-aware scoring using structured outputs with complete content data."""
+        
+        # Extract and structure user interests more comprehensively
+        primary_goals = user_info.get('goals', 'AI Research')
+        news_interest = user_info.get('news_interest', '')
+        user_title = user_info.get('title', 'Researcher')
+        
+        # Build more comprehensive interest context
+        interest_context = f"Primary research/learning goals: {primary_goals}"
+        if news_interest:
+            interest_context += f"\nSpecific news interest: {news_interest}"
+        
         system_prompt = f"""You are an expert analyst who ranks both research papers and news articles based on their relevance to a user's research interests and current work.
 
-Below is a list of content items in JSON format, which may include both academic papers and news articles. Select the {top_n} most relevant items based on the user profile.
+Below is a list of content items in JSON format with complete metadata, which may include both academic papers and news articles. Select the {top_n} most relevant items based on the user profile.
 
-When ranking, consider:
-1. Research papers: Focus on technical relevance, methodological contributions, and potential applications
-2. News articles: Focus on industry relevance, emerging trends, company/technology mentions, and timely information
-3. {"Give slightly higher weight to recent news for timely insights" if weight_recency else "Weight all content equally regardless of publication date"}
+USER PROFILE ANALYSIS:
+- Primary Role: {user_title}
+- {interest_context}
 
-You must return a structured response with an "articles" field containing exactly {top_n} selected items. Each item must include:
-- title: Title
-- score: Relevance score 0-100 (integer)
-- reasoning: Brief explanation of relevance
-- abstract_url: The item's URL
-- authors: List of authors
-- subject: Subject category or "news"
-- html_url: HTML URL if available (optional)
-- pdf_url: PDF URL for papers (optional)
-- type: "paper" or "news"
-- source: News source name for news articles (optional)
-- published_at: Publication timestamp for news (optional)
+RANKING STRATEGY - Balance multiple dimensions of relevance:
+
+1. **Research Papers**: Score based on:
+   - Technical relevance to primary goals ({primary_goals})
+   - Methodological contributions applicable to user's work
+   - Foundational knowledge that advances understanding
+   - Practical applications for their role
+
+2. **News Articles**: Score based on:
+   - Industry developments affecting their work
+   - Company/technology mentions relevant to their interests
+   - Emerging trends that impact their field
+   - Timely information for professional awareness
+
+3. **Balanced Selection Rules**:
+   - PRIORITIZE PRIMARY GOALS: Papers related to "{primary_goals}" should be weighted heavily
+   - SUPPLEMENT WITH NEWS: Include relevant industry news that connects to their work
+   - {"RECENCY BONUS: Give slight preference to recent developments when equally relevant" if weight_recency else "IGNORE RECENCY: Focus purely on relevance regardless of date"}
+   - AIM FOR DIVERSITY: Unless user has very narrow interests, include both research depth AND industry awareness
+   - QUALITY OVER TYPE: Choose the most relevant content regardless of paper/news ratio
+
+4. **Special Considerations**:
+   - For technical roles (like "Tester", "Engineer", "Developer"): Balance cutting-edge research with practical industry developments
+   - For research roles: Emphasize papers but include industry trends that inform research direction
+   - When news_interest is specified: Include relevant news but don't let it dominate over primary research goals
+
+You must return a structured response with an "articles" field containing exactly {top_n} selected items. For each item:
+- Return ALL the original fields from the input content
+- Add relevance_score: Relevance score 0-100 (integer)
+- Add score_reason: Brief explanation of relevance that mentions WHY this specific content serves their goals
+- Ensure the content data is complete and unchanged except for the ranking fields
 
 CRITICAL INSTRUCTIONS:
 1. You MUST select exactly {top_n} items (not fewer, not more)
-2. Mix papers and news based on relevance - don't artificially balance types
-3. Consider the user's role and interests when weighing paper vs news relevance
-4. For news, focus on business/industry impact and emerging trends
-5. Return them in descending order by relevance score"""
+2. Preserve ALL original content metadata and fields
+3. SELECT THE MOST RELEVANT CONTENT regardless of type - don't artificially balance
+4. Explain relevance in terms of the user's specific role and goals
+5. Consider both immediate applicability and long-term learning value
+6. Return them in descending order by relevance score
+7. Do NOT modify any existing fields except to add relevance_score and score_reason"""
 
         user_prompt = f"""User profile:
 Name: {user_info.get('name', 'Researcher')}
-Title: {user_info.get('title', 'Researcher')}
-Research Interests: {user_info.get('goals', ', '.join(user_info.get('research_interests', [])))}
+Title: {user_title}
+Primary Goals: {primary_goals}
+{f"News Interest: {news_interest}" if news_interest else ""}
 
 Content items:
 {json.dumps(content, indent=2)}"""
@@ -299,39 +367,48 @@ Content items:
             )
             
             if isinstance(response, RankingResponse):
-                # Successful structured output
-                logfire.info(f"Mixed content structured output success: got {len(response.articles)} items")
-                
-                # Convert to list of dicts for merging
-                ranked_data = [article.model_dump() for article in response.articles]
-                merged_content = self._merge_llm_and_original_articles(ranked_data, content)
+                # Successful structured output - content is already complete
+                logfire.info(f"Mixed content structured output success: got {len(response.articles)} complete items")
                 
                 ranked_articles = []
-                for item in merged_content[:top_n]:
+                for article in response.articles[:top_n]:
                     try:
-                        # Ensure proper type field
-                        if 'type' not in item:
-                            item['type'] = 'news' if item.get('subject') == 'news' else 'paper'
+                        # Convert ArticleRanking to dict and create RankedArticle
+                        article_data = article.model_dump()
+                        # Ensure we have the required field mappings for RankedArticle
+                        if 'score' in article_data and 'relevance_score' not in article_data:
+                            article_data['relevance_score'] = article_data.pop('score')
+                        if 'reasoning' in article_data and 'score_reason' not in article_data:
+                            article_data['score_reason'] = article_data.pop('reasoning')
                         
-                        ranked_articles.append(RankedArticle(**item))
+                        # Ensure proper type field
+                        if 'type' not in article_data or not article_data['type']:
+                            article_data['type'] = 'news' if article_data.get('subject') == 'news' else 'paper'
+                        
+                        ranked_articles.append(RankedArticle(**article_data))
                     except Exception as e:
-                        item_str = str(item)[:200].replace('{', '{{').replace('}', '}}')
+                        item_str = str(article.model_dump())[:200].replace('{', '{{').replace('}', '}}')
                         logfire.error(f"Failed to create RankedArticle from mixed structured output: {str(e)}, data: {item_str}")
                         continue
 
-                logfire.info(f"Successfully ranked {len(ranked_articles)} mixed content items via structured output")
+                logfire.info(f"Successfully ranked {len(ranked_articles)} complete mixed content items via structured output")
                 return ranked_articles
                 
             elif isinstance(response, list):
-                # Fallback response as list of dicts
-                logfire.info(f"Mixed content fallback response: got {len(response)} items as list")
-                merged_content = self._merge_llm_and_original_articles(response, content)
+                # Fallback response as list of dicts - should already be complete
+                logfire.info(f"Mixed content fallback response: got {len(response)} complete items as list")
                 
                 ranked_articles = []
-                for item in merged_content[:top_n]:
+                for item in response[:top_n]:
                     try:
+                        # Ensure we have the required field mappings for RankedArticle
+                        if 'score' in item and 'relevance_score' not in item:
+                            item['relevance_score'] = item.pop('score')
+                        if 'reasoning' in item and 'score_reason' not in item:
+                            item['score_reason'] = item.pop('reasoning')
+                        
                         # Ensure proper type field
-                        if 'type' not in item:
+                        if 'type' not in item or not item['type']:
                             item['type'] = 'news' if item.get('subject') == 'news' else 'paper'
                         
                         ranked_articles.append(RankedArticle(**item))
@@ -457,50 +534,7 @@ Article Content (first 8000 chars):
             }
             return ArticleAnalysis(**error_data)
 
-    def _merge_llm_and_original_articles(self, llm_results: List[Dict], original_articles: List[Dict]) -> List[Dict]:
-        """Merge LLM ranking output with original article data."""
-        logfire.info(f"Merging {len(llm_results)} LLM results with {len(original_articles)} original articles")
-        
-        original_articles_map = {str(orig.get('abstract_url')): orig for orig in original_articles if orig.get('abstract_url')}
-        
-        filled_ranked_articles = []
-        processed_urls = set()
-        
-        for llm_article in llm_results:
-            abstract_url = str(llm_article.get('abstract_url', ''))
-            
-            if abstract_url in processed_urls:
-                logfire.warn(f"Skipping duplicate article from LLM output: {llm_article.get('title')}")
-                continue
-            processed_urls.add(abstract_url)
-            
-            original_data = original_articles_map.get(abstract_url)
-            
-            if original_data:
-                merged_data = original_data.copy()
-                
-                merged_data.update({
-                    'relevance_score': llm_article.get('score', llm_article.get('relevance_score', 0)),
-                    'score_reason': llm_article.get('reasoning', llm_article.get('score_reason', '')),
-                })
-                
-                merged_data.setdefault('title', llm_article.get('title', 'Unknown'))
-                merged_data.setdefault('authors', llm_article.get('authors', ['Unknown']))
-                merged_data.setdefault('subject', llm_article.get('subject', 'cs.AI'))
-                
-                filled_ranked_articles.append(merged_data)
-            else:
-                logfire.warn(f"Could not find original data for ranked article: '{llm_article.get('title')}' ({abstract_url}). Using LLM output directly.")
-                
-                llm_article.setdefault('relevance_score', llm_article.get('score', 0))
-                llm_article.setdefault('score_reason', llm_article.get('reasoning', ''))
-                llm_article.setdefault('authors', ['Unknown'])
-                llm_article.setdefault('subject', 'cs.AI')
-                
-                filled_ranked_articles.append(llm_article)
-        
-        logfire.info(f"Successfully merged {len(filled_ranked_articles)} articles")
-        return filled_ranked_articles
+
 
     def _determine_action(self, analysis_data: Dict[str, Any]) -> str:
         """Determine recommended action based on analysis."""

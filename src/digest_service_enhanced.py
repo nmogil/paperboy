@@ -185,7 +185,7 @@ class EnhancedDigestService:
             logfire.error(f"Error simplifying content: {e}")
             return text[:max_length] if len(text) > max_length else text
 
-    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None, digest_sources: Optional[Dict[str, bool]] = None) -> None:
+    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None, digest_sources: Optional[Dict[str, bool]] = None, top_n_news: int = None) -> None:
         """Generate a complete digest for the user with circuit breaker protection."""
         try:
             # Set default digest sources if not provided
@@ -214,7 +214,7 @@ class EnhancedDigestService:
                     task_id,
                     DigestStatus(status=TaskStatus.PROCESSING, message="Fetching relevant news...")
                 )
-                news_articles = await self._fetch_news_with_breaker(user_info, target_date)
+                news_articles = await self._fetch_news_with_breaker(user_info, target_date, top_n_news)
                 logfire.info("Fetched news articles", extra={"count": len(news_articles)})
 
             # Combine articles and news
@@ -323,7 +323,7 @@ class EnhancedDigestService:
             logfire.error("Failed to fetch papers: {error}", error=str(e))
             raise
 
-    async def _fetch_news_with_breaker(self, user_info: Dict[str, Any], target_date: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def _fetch_news_with_breaker(self, user_info: Dict[str, Any], target_date: Optional[str] = None, top_n_news: int = None) -> List[Dict[str, Any]]:
         """Fetch news with circuit breaker protection."""
         if not settings.news_enabled:
             return []
@@ -347,7 +347,7 @@ class EnhancedDigestService:
                 return []
             
             # Rank news articles
-            top_news = await self._rank_news_articles(raw_news, user_info, top_n=5)
+            top_news = await self._rank_news_articles(raw_news, user_info, top_n_news)
             
             if not top_news:
                 return []
@@ -555,10 +555,12 @@ class EnhancedDigestService:
             type=article.type
         )
 
-    # Include all the original methods that don't need modification
-    async def _rank_news_articles(self, news_articles: List[Dict[str, Any]], user_info: Dict[str, Any], top_n: int = 5) -> List[Dict[str, Any]]:
+    async def _rank_news_articles(self, news_articles: List[Dict[str, Any]], user_info: Dict[str, Any], top_n: int = None) -> List[Dict[str, Any]]:
         """Use OpenAI to rank and filter news articles before content extraction."""
-        # [Original implementation remains the same]
+        # Use configured setting if top_n is not provided
+        if top_n is None:
+            top_n = settings.top_n_news
+            
         if not news_articles:
             return []
 
@@ -628,6 +630,7 @@ News Articles to rank:
         news = [item for item in content if item.get('type') == 'news']
         
         logfire.info("Content breakdown for ranking", extra={"papers": len(papers), "news": len(news), "total": len(content)})
+        print(f"🔍 DEBUG: Content breakdown - Papers: {len(papers)}, News: {len(news)}, Total: {len(content)}")
         
         max_articles = getattr(settings, 'ranking_input_max_articles', 20)
         
@@ -637,13 +640,29 @@ News Articles to rank:
             max_papers = max_articles - max_news
             content_subset = news[:max_news] + papers[:max_papers]
             
-            logfire.info("Balanced content subset for ranking", extra={"papers_in_subset": min(max_papers, len(papers)), "news_in_subset": min(max_news, len(news)), "total_subset": len(content_subset)})
+            logfire.info("Balanced content subset for ranking", extra={
+                "papers_available": len(papers), 
+                "news_available": len(news), 
+                "total_available": len(content),
+                "news_ratio": news_ratio,
+                "max_news_calculated": max_news,
+                "max_papers_calculated": max_papers,
+                "papers_in_subset": min(max_papers, len(papers)), 
+                "news_in_subset": min(max_news, len(news)), 
+                "total_subset": len(content_subset),
+                "content_subset_papers": len([item for item in content_subset if item.get('type') != 'news']),
+                "content_subset_news": len([item for item in content_subset if item.get('type') == 'news'])
+            })
+            print(f"🔍 DEBUG: Balanced subset - Available: {len(papers)} papers, {len(news)} news. Calculated limits: {max_papers} papers, {max_news} news. Final subset: {len([item for item in content_subset if item.get('type') != 'news'])} papers, {len([item for item in content_subset if item.get('type') == 'news'])} news")
         elif news:
             content_subset = news[:max_articles]
+            print(f"🔍 DEBUG: Only news available - using {len(content_subset)} news articles")
         elif papers:
             content_subset = papers[:max_articles]
+            print(f"🔍 DEBUG: Only papers available - using {len(content_subset)} papers")
         else:
             content_subset = []
+            print(f"🔍 DEBUG: No content available!")
         
         if not content_subset:
             return []

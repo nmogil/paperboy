@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(..., validation_alias='OPENAI_API_KEY')
     openai_model: str = Field(default='gpt-4o', validation_alias='OPENAI_MODEL')
     top_n_articles: int = Field(default=5, validation_alias='TOP_N_ARTICLES')
+    top_n_news: int = Field(default=5, validation_alias='TOP_N_NEWS', description="Number of news articles to include in digest")
     ranking_input_max_articles: int = Field(default=20, validation_alias='RANKING_INPUT_MAX_ARTICLES', description="Maximum number of raw articles to send to the LLM for the ranking step.")
     
     use_lightweight: bool = Field(default=True, validation_alias='USE_LIGHTWEIGHT', description="Use lightweight version without Playwright")
