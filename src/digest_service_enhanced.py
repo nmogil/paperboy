@@ -13,7 +13,7 @@ import json
 from .models import TaskStatus, DigestStatus, RankedArticle, ArticleAnalysis, ContentType
 from .llm_client import LLMClient
 from .fetcher_lightweight import ArxivFetcher
-from .state import TaskStateManager
+from .state_supabase import TaskStateManager
 from .config import settings
 from .news_fetcher import NewsAPIFetcher
 from .content_extractor import TavilyExtractor

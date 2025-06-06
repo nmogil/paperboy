@@ -16,7 +16,7 @@ paperboy/
 │   ├── main.py                  # FastAPI application with background tasks
 │   ├── models.py                # Pydantic models for type safety
 │   ├── security.py              # API key authentication middleware
-│   └── state.py                 # JSON-based state persistence
+
 ├── config/                      # Configuration files
 │   ├── settings.py             # Additional configuration settings
 │   └── .env                    # Environment variables (create from .env.example)
@@ -376,7 +376,6 @@ The system follows a modular design:
 - **`agent_tools_lightweight.py`**: Content extraction and processing
 - **`models.py`**: Type-safe Pydantic models throughout
 - **`config.py`**: Centralized environment-based configuration
-- **`state.py`**: JSON-based persistence for task tracking
 
 ### Key Patterns
 

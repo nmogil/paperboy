@@ -20,8 +20,7 @@ from .security import validate_api_key
 from .config import settings
 
 # Import new components
-from .state_supabase import SupabaseTaskStateManager
-from .state import TaskStateManager
+from .state_supabase import TaskStateManager
 from .cache_supabase import HybridCache
 from .circuit_breaker import ServiceCircuitBreakers
 from .graceful_shutdown import GracefulShutdown, RequestTracker
@@ -62,20 +61,7 @@ def get_supabase_client() -> Client:
     return SUPABASE_CLIENT
 
 
-def get_state_manager() -> TaskStateManager:
-    """Get appropriate state manager based on configuration."""
-    use_external_state = os.getenv('USE_EXTERNAL_STATE', 'true').lower() == 'true'
-    
-    if use_external_state:
-        try:
-            client = get_supabase_client()
-            return SupabaseTaskStateManager()
-        except Exception as e:
-            logger.error(f"Failed to initialize Supabase state manager: {e}")
-            logger.warn("Falling back to in-memory state manager")
-            return TaskStateManager()
-    else:
-        return TaskStateManager()
+
 
 
 @asynccontextmanager
@@ -86,27 +72,21 @@ async def lifespan(app: FastAPI):
     SHUTDOWN_HANDLER = GracefulShutdown(timeout=int(os.getenv('SHUTDOWN_TIMEOUT', '30')))
     SHUTDOWN_HANDLER.setup_signal_handlers()
     
-    # Initialize state manager
-    app.state.state_manager = get_state_manager()
+    # Initialize Supabase state manager
+    app.state.state_manager = TaskStateManager()
     
-    # Initialize Supabase client if using external state
-    try:
-        app.state.supabase_client = get_supabase_client()
-        
-        # Initialize circuit breakers with Supabase
-        app.state.circuit_breakers = ServiceCircuitBreakers(app.state.supabase_client)
-        
-        # Initialize hybrid cache
-        app.state.cache = HybridCache(
-            app.state.supabase_client,
-            memory_ttl=300,  # 5 min memory cache
-            persistent_ttl=int(os.getenv('CACHE_TTL', '3600'))  # 1 hour persistent
-        )
-    except Exception as e:
-        logger.error(f"Failed to initialize Supabase components: {e}")
-        app.state.supabase_client = None
-        app.state.circuit_breakers = ServiceCircuitBreakers()
-        app.state.cache = None
+    # Initialize Supabase client
+    app.state.supabase_client = get_supabase_client()
+    
+    # Initialize circuit breakers with Supabase
+    app.state.circuit_breakers = ServiceCircuitBreakers(app.state.supabase_client)
+    
+    # Initialize hybrid cache
+    app.state.cache = HybridCache(
+        app.state.supabase_client,
+        memory_ttl=300,  # 5 min memory cache
+        persistent_ttl=int(os.getenv('CACHE_TTL', '3600'))  # 1 hour persistent
+    )
     
     # Initialize digest service with enhanced components
     app.state.digest_service = DigestService()
@@ -338,7 +318,6 @@ async def get_metrics(api_key: str = Depends(validate_api_key)):
     """Get application metrics and circuit breaker status."""
     metrics = {
         "version": "2.1.0",
-        "use_external_state": os.getenv('USE_EXTERNAL_STATE', 'true').lower() == 'true',
         "has_supabase": app.state.supabase_client is not None,
         "has_cache": app.state.cache is not None,
         "circuit_breakers": await app.state.circuit_breakers.get_all_status() if app.state.circuit_breakers else {},

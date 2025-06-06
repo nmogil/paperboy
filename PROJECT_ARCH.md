@@ -162,25 +162,22 @@ graph TB
 
 #### State Management
 
-##### In-Memory State (`src/state.py`)
-- Local task state persistence (fallback)
-- Thread-safe operations with asyncio locks
-- Task lifecycle management
+##### State Management (`src/state_supabase.py`)
 
-##### Distributed State (`src/state_supabase.py`)
 - Supabase-based distributed state management
 - Enables higher concurrency in Cloud Run
-- Automatic fallback to in-memory when unavailable
 - Task state stored in `digest_tasks` table
 
 #### Cache System
 
 ##### In-Memory Cache (`src/cache.py`)
+
 - TTL-based in-memory caching (fallback)
 - Reduces redundant API calls
 - Automatic expiration handling
 
 ##### Hybrid Cache (`src/cache_supabase.py`)
+
 - Two-tier caching: in-memory LRU + Supabase persistence
 - Distributed cache sharing across instances
 - Cache entries stored in `cache_entries` table
@@ -189,24 +186,28 @@ graph TB
 #### Reliability Components
 
 ##### Circuit Breaker (`src/circuit_breaker.py`)
+
 - Prevents cascading failures from external services
 - Automatic service recovery detection
 - Per-service circuit breaker instances
 - State optionally persisted to Supabase
 
 ##### Graceful Shutdown (`src/graceful_shutdown.py`)
+
 - Proper SIGTERM handling for Cloud Run
 - Tracks in-flight requests
 - Configurable shutdown timeout
 - Ensures clean task completion
 
 ##### Metrics (`src/metrics.py`)
+
 - Performance monitoring
 - API call tracking
 - Success/failure rates
 - Latency measurements
 
 #### Security (`src/security.py`)
+
 - API key validation middleware
 - FastAPI dependency injection
 - Header-based authentication
@@ -268,6 +269,7 @@ graph TB
 The system uses environment-based configuration with sensible defaults:
 
 ### Core Configuration
+
 - `OPENAI_API_KEY`: OpenAI API access (required)
 - `API_KEY`: Authentication for API endpoints (required)
 - `OPENAI_MODEL`: Model selection (default: gpt-4o-mini-2024-07-18)
@@ -275,6 +277,7 @@ The system uses environment-based configuration with sensible defaults:
 - `LOG_LEVEL`: Logging verbosity (default: INFO)
 
 ### Performance Settings
+
 - `HTTP_TIMEOUT`: HTTP request timeout in seconds (default: 30)
 - `TASK_TIMEOUT`: Max digest generation time (default: 300s)
 - `AGENT_RETRIES`: LLM retry attempts (default: 2)
@@ -285,19 +288,21 @@ The system uses environment-based configuration with sensible defaults:
 - `SHUTDOWN_TIMEOUT`: Graceful shutdown timeout (default: 30s)
 
 ### Feature Toggles
+
 - `NEWS_ENABLED`: Enable news fetching (default: true)
 - `NEWS_MAX_ARTICLES`: Max news articles to fetch (default: 50)
 - `NEWS_MAX_EXTRACT`: Max articles to extract full content (default: 10)
 - `NEWS_CACHE_TTL`: News cache duration in seconds (default: 3600)
-- `USE_EXTERNAL_STATE`: Enable Supabase for state/cache (default: false)
 
 ### External Services
+
 - `NEWSAPI_KEY`: NewsAPI key for news fetching (optional)
 - `TAVILY_API_KEY`: Tavily API key for content extraction (optional)
-- `SUPABASE_URL`: Supabase project URL (required if USE_EXTERNAL_STATE=true)
-- `SUPABASE_KEY`: Supabase anon key (required if USE_EXTERNAL_STATE=true)
+- `SUPABASE_URL`: Supabase project URL (required)
+- `SUPABASE_KEY`: Supabase anon key (required)
 
 ### Deployment Settings
+
 - `USE_LIGHTWEIGHT`: Use httpx instead of Playwright (default: true)
 - `LOGFIRE_TOKEN`: Monitoring service token (optional)
 
@@ -306,10 +311,8 @@ The system uses environment-based configuration with sensible defaults:
 - **Container**: Lightweight Docker image with security hardening
 - **Memory**: 512Mi for lightweight version (reduced from 1Gi)
 - **Scaling**: Auto-scales 0-50 instances based on demand
-- **Concurrency**: 
-  - Set to 1 with in-memory state (default)
-  - Set to 5 with Supabase distributed state
-- **Security**: 
+- **Concurrency**: Set to 5 with Supabase distributed state
+- **Security**:
   - Non-root user (UID 10001)
   - Read-only filesystem with tmpfs mounts
   - Dropped capabilities except NET_BIND_SERVICE
@@ -320,7 +323,7 @@ The system uses environment-based configuration with sensible defaults:
 
 ### Supabase Schema Requirements
 
-When using distributed state (`USE_EXTERNAL_STATE=true`), the following tables are required:
+The following tables are required in Supabase:
 
 ```sql
 -- Task state storage
@@ -359,7 +362,7 @@ CREATE TABLE circuit_breaker_state (
 - Comprehensive exception handling at all layers
 - Graceful degradation when optional services fail
 - Circuit breakers prevent cascading failures
-- Automatic fallback from Supabase to in-memory storage
+
 - Detailed logging with structured context
 - User-friendly error messages in API responses
 - Request tracking ensures clean shutdown

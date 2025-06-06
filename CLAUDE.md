@@ -7,9 +7,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Paperboy is an AI-powered academic paper recommendation system that ranks and analyzes arXiv papers and news articles based on user research profiles. It uses OpenAI models to provide personalized digests of relevant research papers and industry news. The system includes enhanced reliability features including circuit breakers, Supabase state management, graceful shutdown, and comprehensive error handling.
 
 **Key Features:**
+
 - **Mixed Content Sources**: ArXiv papers + NewsAPI articles ranked together
 - **Supabase Integration**: External state management and distributed caching
-- **Circuit Breakers**: Graceful degradation when external services fail  
+- **Circuit Breakers**: Graceful degradation when external services fail
 - **Graceful Shutdown**: Proper SIGTERM handling for Cloud Run
 - **Enhanced Error Handling**: Comprehensive fallback strategies
 - **Distributed State**: Enables higher concurrency in Cloud Run
@@ -94,9 +95,10 @@ The codebase follows a modular architecture with clear separation of concerns:
 7. **Query Generation** (`query_generator.py`): Smart news query generation based on user profiles
 8. **Models** (`models.py`, `api_models.py`): Pydantic models for type safety across the system
 9. **Configuration** (`config.py`): Centralized settings management via Pydantic BaseSettings
-10. **State Management**: 
-    - `state.py`: In-memory task state persistence (fallback)
+10. **State Management**:
+
     - `state_supabase.py`: Supabase-based distributed state management
+
 11. **Security** (`security.py`): API key authentication middleware
 12. **Caching**:
     - `cache.py`: In-memory cache with TTL (fallback)
@@ -132,6 +134,7 @@ The codebase follows a modular architecture with clear separation of concerns:
 Required environment variables in `config/.env`:
 
 **Core Configuration:**
+
 - `OPENAI_API_KEY`: OpenAI API access (required)
 - `API_KEY`: Authentication for API endpoints (required)
 - `OPENAI_MODEL`: Model selection (default: gpt-4.1-mini-2025-04-14 per .env.example)
@@ -139,6 +142,7 @@ Required environment variables in `config/.env`:
 - `LOG_LEVEL`: Logging level (default: INFO)
 
 **Performance Settings:**
+
 - `CRAWLER_TIMEOUT`: Web crawler timeout in ms (default: 25000)
 - `HTTP_TIMEOUT`: HTTP request timeout in seconds (default: 30)
 - `TASK_TIMEOUT`: Max digest generation time in seconds (default: 300)
@@ -147,6 +151,7 @@ Required environment variables in `config/.env`:
 - `RANKING_INPUT_MAX_ARTICLES`: Max articles for ranking (default: 30 per .env.example)
 
 **News Integration:**
+
 - `NEWSAPI_KEY`: NewsAPI key for news fetching (optional)
 - `TAVILY_API_KEY`: Tavily API key for content extraction (optional)
 - `NEWS_ENABLED`: Enable news fetching (default: true)
@@ -155,11 +160,13 @@ Required environment variables in `config/.env`:
 - `NEWS_CACHE_TTL`: Cache duration in seconds (default: 3600)
 
 **Supabase Integration:**
+
 - `SUPABASE_URL`: Supabase project URL (optional, for distributed state)
 - `SUPABASE_KEY`: Supabase anon key (optional, for distributed state)
 - `USE_SUPABASE`: Enable Supabase for state management (default: false)
 
 **Deployment:**
+
 - `USE_LIGHTWEIGHT`: Use httpx instead of Playwright (default: true)
 - `LOGFIRE_TOKEN`: Monitoring service token (optional)
 
@@ -267,6 +274,7 @@ Error handling ensures the digest continues even if news APIs fail.
 ### Deployment Scripts
 
 **deploy_cloudrun.sh** features:
+
 - Automatic Google Cloud API enablement
 - Secret Manager integration for secure environment variables
 - Service account support with automatic fallback
@@ -275,6 +283,7 @@ Error handling ensures the digest continues even if news APIs fail.
 - Comprehensive error handling and validation
 
 **cloudbuild.yaml** configuration:
+
 - Uses Artifact Registry (not Container Registry)
 - High-performance build machine (N1_HIGHCPU_8)
 - Automatic secret mapping from Secret Manager
