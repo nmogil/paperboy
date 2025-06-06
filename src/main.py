@@ -64,9 +64,22 @@ def get_supabase_client() -> Client:
 
 
 
+def validate_environment():
+    """Validate required environment variables at startup."""
+    required_vars = [
+        'SUPABASE_URL', 'SUPABASE_KEY', 'OPENAI_API_KEY', 'API_KEY'
+    ]
+    missing = [var for var in required_vars if not os.getenv(var)]
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {missing}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Enhanced lifespan with graceful shutdown and connection management."""
+    # Validate required environment variables first
+    validate_environment()
+    
     # Initialize shutdown handler
     global SHUTDOWN_HANDLER
     SHUTDOWN_HANDLER = GracefulShutdown(timeout=int(os.getenv('SHUTDOWN_TIMEOUT', '30')))
@@ -190,6 +203,46 @@ async def track_requests(request: Request, call_next):
     return await call_next(request)
 
 
+# Add request timeout middleware
+@app.middleware("http")
+async def timeout_middleware(request: Request, call_next):
+    """Add timeout to all requests."""
+    try:
+        timeout_value = int(os.getenv('REQUEST_TIMEOUT', '295'))  # 5s buffer before Cloud Run's 300s
+        # Use asyncio.wait_for for Python 3.10 compatibility
+        return await asyncio.wait_for(call_next(request), timeout=timeout_value)
+    except asyncio.TimeoutError:
+        logger.error(f"Request timeout after {timeout_value} seconds: {request.url.path}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=504,
+            content={"detail": "Request timeout"}
+        )
+
+
+async def safe_background_task(task_id: str, *args, **kwargs):
+    """Wrapper for background tasks with timeout and error handling."""
+    try:
+        task_timeout = int(os.getenv('TASK_TIMEOUT', '295'))
+        # Use asyncio.wait_for for Python 3.10 compatibility
+        await asyncio.wait_for(
+            app.state.digest_service.generate_digest(task_id, *args, **kwargs),
+            timeout=task_timeout
+        )
+    except asyncio.TimeoutError:
+        await app.state.state_manager.update_task(
+            task_id,
+            DigestStatus(status=TaskStatus.FAILED, message="Task timeout")
+        )
+        logger.error(f"Task {task_id} timed out after {task_timeout} seconds")
+    except Exception as e:
+        await app.state.state_manager.update_task(
+            task_id,
+            DigestStatus(status=TaskStatus.FAILED, message=f"Task failed: {str(e)}")
+        )
+        logger.exception(f"Task {task_id} failed with error: {e}")
+
+
 @app.post("/generate-digest", response_model=GenerateDigestResponse, dependencies=[Depends(validate_api_key)])
 async def generate_digest(
     request: GenerateDigestRequest,
@@ -224,7 +277,7 @@ async def generate_digest(
     if SHUTDOWN_HANDLER:
         async with SHUTDOWN_HANDLER.track_request(f"digest-{task_id}"):
             background_tasks.add_task(
-                app.state.digest_service.generate_digest,
+                safe_background_task,
                 task_id,
                 user_info,
                 str(request.callback_url) if request.callback_url else None,
@@ -235,7 +288,7 @@ async def generate_digest(
             )
     else:
         background_tasks.add_task(
-            app.state.digest_service.generate_digest,
+            safe_background_task,
             task_id,
             user_info,
             str(request.callback_url) if request.callback_url else None,
@@ -339,6 +392,40 @@ async def get_metrics(api_key: str = Depends(validate_api_key)):
 async def health_check_alt():
     """Alternative health check endpoint."""
     return {"status": "healthy", "version": "2.1.0"}
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Comprehensive readiness check for Cloud Run."""
+    from fastapi.responses import JSONResponse
+    
+    checks = {}
+    overall_healthy = True
+    
+    # Check Supabase connectivity
+    try:
+        await app.state.supabase_client.table('digest_tasks').select("count").limit(1).execute()
+        checks["supabase"] = "healthy"
+    except Exception as e:
+        checks["supabase"] = f"unhealthy: {str(e)}"
+        overall_healthy = False
+    
+    # Check circuit breakers if available
+    if hasattr(app.state, 'circuit_breakers') and app.state.circuit_breakers:
+        try:
+            # Simple check that circuit breakers exist and are accessible
+            checks["circuit_breakers"] = "healthy"
+        except Exception as e:
+            checks["circuit_breakers"] = f"error: {str(e)}"
+            overall_healthy = False
+    else:
+        checks["circuit_breakers"] = "not_configured"
+    
+    status_code = 200 if overall_healthy else 503
+    return JSONResponse(status_code=status_code, content={
+        "status": "ready" if overall_healthy else "not_ready",
+        "checks": checks
+    })
 
 
 @app.post("/generate_digest", response_model=GenerateDigestResponse, dependencies=[Depends(validate_api_key)])

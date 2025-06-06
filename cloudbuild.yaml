@@ -28,10 +28,12 @@ steps:
       - "--platform=managed"
       - "--memory=512Mi"
       - "--cpu=1"
-      - "--min-instances=0"
+      - "--min-instances=1" # Keep warm to avoid cold starts
       - "--max-instances=50"
-      - "--concurrency=5" # Increased from 1 with Supabase state management
-      - "--timeout=3600"
+      - "--concurrency=10" # Increased for better throughput with Supabase
+      - "--timeout=300" # 5 minutes instead of 3600
+      - "--cpu-throttling" # Enable for cost savings
+      - "--execution-environment=gen2" # Better performance
       - "--no-allow-unauthenticated"
       - "--set-env-vars=USE_LIGHTWEIGHT=true,SHUTDOWN_TIMEOUT=30,CACHE_TTL=3600,ANALYSIS_CONTENT_MAX_CHARS=8000,RANKING_INPUT_MAX_ARTICLES=20,TASK_TIMEOUT=300,HTTP_TIMEOUT=30"
       - "--set-secrets=OPENAI_API_KEY=OPENAI_API_KEY:latest,API_KEY=API_KEY:latest,LOGFIRE_TOKEN=LOGFIRE_TOKEN:latest,OPENAI_MODEL=OPENAI_MODEL:latest,TOP_N_ARTICLES=TOP_N_ARTICLES:latest,NEWSAPI_KEY=NEWSAPI_KEY:latest,TAVILY_API_KEY=TAVILY_API_KEY:latest,SUPABASE_URL=SUPABASE_URL:latest,SUPABASE_KEY=SUPABASE_KEY:latest"

@@ -26,7 +26,21 @@ class NewsAPIFetcher:
         
         self.api_key = settings.newsapi_key
         self.base_url = "https://newsapi.org/v2/everything"
-        self.client = httpx.AsyncClient(timeout=30.0)
+        # Optimized HTTP client configuration for Cloud Run
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=5.0,      # Quick connection timeout
+                read=25.0,        # Allow time for large responses
+                write=10.0,       # Quick write timeout
+                pool=2.0          # Quick pool timeout
+            ),
+            limits=httpx.Limits(
+                max_keepalive_connections=20,
+                max_connections=40,
+                keepalive_expiry=30.0
+            ),
+            http2=True,  # Enable HTTP/2 for better performance
+        )
         
         # Time-based rate limiting: NewsAPI free tier allows ~100 requests per day
         # We'll be conservative and limit to 1 request per 2 seconds (1800 per hour max)

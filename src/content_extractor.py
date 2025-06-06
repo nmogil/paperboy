@@ -23,6 +23,22 @@ class TavilyExtractor:
         self.semaphore = asyncio.Semaphore(settings.extract_max_concurrent)
         self._request_count = 0
         self._request_limit = 100  # Assumed daily limit
+        
+        # Optimized HTTP client configuration for Cloud Run
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=5.0,      # Quick connection timeout
+                read=settings.extract_timeout or 25.0,  # Use extract_timeout if set
+                write=10.0,       # Quick write timeout
+                pool=2.0          # Quick pool timeout
+            ),
+            limits=httpx.Limits(
+                max_keepalive_connections=20,
+                max_connections=40,
+                keepalive_expiry=30.0
+            ),
+            http2=True,  # Enable HTTP/2 for better performance
+        )
     
     @NewsMetrics.track_content_extraction
     async def extract_articles(
@@ -122,45 +138,44 @@ class TavilyExtractor:
     )
     async def _extract_single(self, url: str) -> str:
         """Extract content from a single URL."""
-        async with httpx.AsyncClient(timeout=settings.extract_timeout) as client:
-            try:
-                response = await client.post(
-                    self.base_url,
-                    json={
-                        "api_key": self.api_key,
-                        "urls": [url],
-                        "include_images": False,
-                        "include_links": False,
-                        "include_formatting": False  # Reduce response size
-                    }
-                )
-                response.raise_for_status()
+        try:
+            response = await self.client.post(
+                self.base_url,
+                json={
+                    "api_key": self.api_key,
+                    "urls": [url],
+                    "include_images": False,
+                    "include_links": False,
+                    "include_formatting": False  # Reduce response size
+                }
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            if data.get('results') and len(data['results']) > 0:
+                result = data['results'][0]
+                # Try both 'raw_content' and 'content' fields for compatibility
+                content = result.get('raw_content', '') or result.get('content', '')
                 
-                data = response.json()
+                # Validate content
+                if len(content) < 100:
+                    raise ContentExtractionError(f"Extracted content too short: {len(content)} chars for {url}")
                 
-                if data.get('results') and len(data['results']) > 0:
-                    result = data['results'][0]
-                    # Try both 'raw_content' and 'content' fields for compatibility
-                    content = result.get('raw_content', '') or result.get('content', '')
-                    
-                    # Validate content
-                    if len(content) < 100:
-                        raise ContentExtractionError(f"Extracted content too short: {len(content)} chars for {url}")
-                    
-                    logfire.info("Successfully extracted content", extra={
-                        "url": url,
-                        "content_length": len(content)
-                    })
-                    
-                    return content
-                else:
-                    raise ContentExtractionError(f"No content extracted for {url}")
-                    
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429:
-                    self._request_limit = self._request_count  # Update limit
-                    raise ContentExtractionError("Rate limit exceeded")
-                raise
+                logfire.info("Successfully extracted content", extra={
+                    "url": url,
+                    "content_length": len(content)
+                })
+                
+                return content
+            else:
+                raise ContentExtractionError(f"No content extracted for {url}")
+                
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                self._request_limit = self._request_count  # Update limit
+                raise ContentExtractionError("Rate limit exceeded")
+            raise
     
     def _add_preview_content(self, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Add preview content as fallback."""
@@ -171,3 +186,7 @@ class TavilyExtractor:
                 article['full_content'] = f"{desc}\n\n{preview}" if desc else preview
                 article['extraction_success'] = False
         return articles
+    
+    async def close(self):
+        """Close the HTTP client."""
+        await self.client.aclose()
