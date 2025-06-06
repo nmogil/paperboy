@@ -16,7 +16,7 @@ paperboy/
 │   ├── main.py                  # FastAPI application with background tasks
 │   ├── models.py                # Pydantic models for type safety
 │   ├── security.py              # API key authentication middleware
-│   └── state.py                 # JSON-based state persistence
+
 ├── config/                      # Configuration files
 │   ├── settings.py             # Additional configuration settings
 │   └── .env                    # Environment variables (create from .env.example)
@@ -36,12 +36,14 @@ paperboy/
 ## Features
 
 ### 🧠 AI-Powered Analysis
+
 - **Intelligent Ranking**: Uses OpenAI models (GPT-4 by default) to rank papers by relevance to user research profile
 - **Detailed Analysis**: Provides in-depth analysis of top papers with reasoning and key insights
 - **Personalized Recommendations**: Tailors suggestions based on user's research goals and academic background
 - **HTML Digest Generation**: Creates formatted research digests with structured analysis
 
 ### 🚀 Production-Ready API
+
 - **Asynchronous Processing**: Background task execution for long-running digest generation
 - **RESTful Endpoints**: Clean API design with status tracking and health checks
 - **API Authentication**: Secure access via API key middleware
@@ -49,6 +51,7 @@ paperboy/
 - **Auto-Documentation**: Swagger UI and ReDoc available at `/docs` and `/redoc`
 
 ### 🐳 Cloud-Native Deployment
+
 - **Docker Support**: Lightweight containers with security best practices
 - **Google Cloud Run**: One-click deployment with included configuration
 - **Auto-Scaling**: Handles variable workloads efficiently
@@ -56,12 +59,14 @@ paperboy/
 - **Resource Limits**: Optimized for cloud environments with proper resource constraints
 
 ### 📊 Data Pipeline
+
 - **arXiv Integration**: Automated fetching and parsing of academic papers
 - **Web Scraping**: Robust content extraction using httpx (lightweight) or Playwright (full)
 - **Content Processing**: Intelligent truncation and formatting for LLM analysis
 - **State Persistence**: JSON-based storage for task tracking and results
 
 ### 🛠 Developer Experience
+
 - **Type Safety**: Comprehensive Pydantic models throughout the codebase
 - **Modern Python**: Async/await patterns, dependency injection, and clean architecture
 - **Easy Configuration**: Environment-based settings with sensible defaults
@@ -71,6 +76,7 @@ paperboy/
 ## Quick Start
 
 ### Prerequisites
+
 - Docker and Docker Compose
 - OpenAI API key
 - (Optional) Google Cloud account for deployment
@@ -85,6 +91,7 @@ cd paperboy
 ### 2. Configure Environment
 
 Create your environment file:
+
 ```bash
 # Copy the example configuration
 cp config/.env.example config/.env
@@ -94,6 +101,7 @@ nano config/.env
 ```
 
 Required environment variables:
+
 ```env
 OPENAI_API_KEY=your_openai_api_key_here
 API_KEY=your_secure_api_key_for_authentication
@@ -112,7 +120,7 @@ docker-compose -f docker-compose.lightweight.yaml up -d --build
 ### 4. Access the API
 
 - **API Endpoints**: http://localhost:8000
-- **Interactive Docs**: http://localhost:8000/docs  
+- **Interactive Docs**: http://localhost:8000/docs
 - **Alternative Docs**: http://localhost:8000/redoc
 - **Health Check**: http://localhost:8000/digest-status/health
 
@@ -134,31 +142,31 @@ All configuration is managed via environment variables in `config/.env`. The sys
 
 ### Core Environment Variables
 
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `OPENAI_API_KEY` | OpenAI API access token | - | ✅ |
-| `API_KEY` | Authentication key for API endpoints | - | ✅ |
-| `OPENAI_MODEL` | OpenAI model to use | `gpt-4o` | |
-| `TOP_N_ARTICLES` | Number of articles to analyze | `5` | |
-| `LOG_LEVEL` | Logging verbosity | `INFO` | |
+| Variable         | Description                          | Default  | Required |
+| ---------------- | ------------------------------------ | -------- | -------- |
+| `OPENAI_API_KEY` | OpenAI API access token              | -        | ✅       |
+| `API_KEY`        | Authentication key for API endpoints | -        | ✅       |
+| `OPENAI_MODEL`   | OpenAI model to use                  | `gpt-4o` |          |
+| `TOP_N_ARTICLES` | Number of articles to analyze        | `5`      |          |
+| `LOG_LEVEL`      | Logging verbosity                    | `INFO`   |          |
 
 ### Performance & Limits
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CRAWLER_TIMEOUT` | Web scraping timeout (ms) | `25000` |
-| `HTTP_TIMEOUT` | HTTP request timeout (seconds) | `30` |
-| `TASK_TIMEOUT` | Max digest generation time (seconds) | `300` |
-| `AGENT_RETRIES` | LLM retry attempts | `2` |
-| `ANALYSIS_CONTENT_MAX_CHARS` | Max content per article for analysis | `8000` |
-| `RANKING_INPUT_MAX_ARTICLES` | Max articles sent to ranking LLM | `20` |
+| Variable                     | Description                          | Default |
+| ---------------------------- | ------------------------------------ | ------- |
+| `CRAWLER_TIMEOUT`            | Web scraping timeout (ms)            | `25000` |
+| `HTTP_TIMEOUT`               | HTTP request timeout (seconds)       | `30`    |
+| `TASK_TIMEOUT`               | Max digest generation time (seconds) | `300`   |
+| `AGENT_RETRIES`              | LLM retry attempts                   | `2`     |
+| `ANALYSIS_CONTENT_MAX_CHARS` | Max content per article for analysis | `8000`  |
+| `RANKING_INPUT_MAX_ARTICLES` | Max articles sent to ranking LLM     | `20`    |
 
 ### Optional Features
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `USE_LIGHTWEIGHT` | Use httpx instead of Playwright | `true` |
-| `LOGFIRE_TOKEN` | Monitoring service token | - |
+| Variable          | Description                     | Default |
+| ----------------- | ------------------------------- | ------- |
+| `USE_LIGHTWEIGHT` | Use httpx instead of Playwright | `true`  |
+| `LOGFIRE_TOKEN`   | Monitoring service token        | -       |
 
 ## API Usage
 
@@ -173,7 +181,7 @@ curl -H "X-API-Key: your_api_key_from_env" http://localhost:8000/endpoint
 ### Core Workflow
 
 1. **Submit a digest request** → Get task ID immediately
-2. **Poll for status** → Track progress and get results  
+2. **Poll for status** → Track progress and get results
 3. **Optional webhooks** → Receive notifications when complete
 
 ### Generate Research Digest
@@ -189,16 +197,53 @@ curl -X POST http://localhost:8000/generate-digest \
   -d '{
     "user_info": {
       "name": "Dr. Jane Smith",
-      "title": "Machine Learning Researcher", 
+      "title": "Machine Learning Researcher",
       "goals": "Exploring latest developments in transformer architectures and efficient training methods"
     },
     "target_date": "2025-05-01",
     "top_n_articles": 5,
+    "digest_sources": {
+      "arxiv": true,
+      "news_api": false
+    },
     "callback_url": "https://your-app.com/webhooks/digest-complete"
   }'
 ```
 
+#### Request Parameters
+
+| Parameter        | Type    | Required | Description                                |
+| ---------------- | ------- | -------- | ------------------------------------------ |
+| `user_info`      | Object  | Yes      | User profile with name, title, and goals   |
+| `target_date`    | String  | No       | Target date for content (YYYY-MM-DD)       |
+| `top_n_articles` | Integer | No       | Number of articles to include (default: 5) |
+| `digest_sources` | Object  | No       | Control which sources to include in digest |
+| `callback_url`   | String  | No       | Webhook URL for completion notification    |
+
+#### Digest Sources Control
+
+The `digest_sources` parameter allows you to control which content sources are included:
+
+```json
+{
+  "digest_sources": {
+    "arxiv": true, // Include ArXiv research papers
+    "news_api": false // Exclude news articles
+  }
+}
+```
+
+- **Default behavior**: If `digest_sources` is not provided, ArXiv is enabled and news follows the global `NEWS_ENABLED` setting
+- **Source options**:
+  - `arxiv`: Research papers from ArXiv
+  - `news_api`: Industry news and articles
+- **Examples**:
+  - Papers only: `{"arxiv": true, "news_api": false}`
+  - News only: `{"arxiv": false, "news_api": true}`
+  - Both sources: `{"arxiv": true, "news_api": true}`
+
 **Response:**
+
 ```json
 {
   "task_id": "abc123",
@@ -217,10 +262,11 @@ curl http://localhost:8000/digest-status/abc123 \
 ```
 
 **Response (Completed):**
+
 ```json
 {
   "task_id": "abc123",
-  "status": "completed", 
+  "status": "completed",
   "result": {
     "digest_html": "<html>...</html>",
     "articles_analyzed": 5,
@@ -260,6 +306,7 @@ gcloud builds submit
 ```
 
 The deployment includes:
+
 - Automatic scaling (0-1000 instances)
 - Health checks and monitoring
 - Secure environment variable management
@@ -324,12 +371,11 @@ pytest tests/integration_test.py
 The system follows a modular design:
 
 - **`main.py`**: FastAPI app with background task handling
-- **`agent.py`**: Core AI logic using Pydantic AI for ranking/analysis  
+- **`agent.py`**: Core AI logic using Pydantic AI for ranking/analysis
 - **`fetcher_lightweight.py`**: arXiv paper fetching with httpx
 - **`agent_tools_lightweight.py`**: Content extraction and processing
 - **`models.py`**: Type-safe Pydantic models throughout
 - **`config.py`**: Centralized environment-based configuration
-- **`state.py`**: JSON-based persistence for task tracking
 
 ### Key Patterns
 
@@ -361,6 +407,7 @@ The system follows a modular design:
 ### Common Issues
 
 #### Startup Problems
+
 ```bash
 # ValidationError on startup
 # ✅ Ensure config/.env exists with required variables
@@ -371,7 +418,8 @@ nano config/.env  # Add OPENAI_API_KEY and API_KEY
 export OPENAI_API_KEY=sk-your-key-here
 ```
 
-#### Docker Issues  
+#### Docker Issues
+
 ```bash
 # Container won't start
 docker-compose logs -f                    # Check logs
@@ -388,6 +436,7 @@ docker system prune
 ```
 
 #### API Authentication
+
 ```bash
 # 401 Unauthorized
 # ✅ Verify X-API-Key header matches config/.env API_KEY
@@ -396,6 +445,7 @@ curl -H "X-API-Key: your_api_key" http://localhost:8000/digest-status/health
 ```
 
 #### Performance Issues
+
 ```bash
 # Out of memory or context limits
 # ✅ Adjust these in config/.env:
@@ -409,6 +459,7 @@ HTTP_TIMEOUT=60                      # Increase HTTP timeout
 ```
 
 #### Production Deployment
+
 ```bash
 # Cloud Run deployment fails
 gcloud auth configure-docker

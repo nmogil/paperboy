@@ -3,6 +3,7 @@ from __future__ import annotations as _annotations
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator, TypeAdapter
 from typing import Any, List, Dict, Optional
 from enum import Enum
+from datetime import datetime
 
 
 class TaskStatus(Enum):
@@ -10,6 +11,10 @@ class TaskStatus(Enum):
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
+
+class ContentType(str, Enum):
+    PAPER = "paper"
+    NEWS = "news"
 
 class DigestStatus(BaseModel):
     status: TaskStatus
@@ -20,14 +25,24 @@ class DigestStatus(BaseModel):
 
 class RankedArticle(BaseModel):
     """Pydantic model for a single ranked article."""
-    title: str = Field(..., description="The exact title of the ArXiv article.")
+    title: str = Field(..., description="The exact title of the article.")
     authors: List[str] = Field(..., min_items=1, description="List of author names for the article.")
-    subject: str = Field(..., description="The primary subject category (e.g., cs.AI, physics.hep-th).")
+    subject: str = Field(..., description="The primary subject category (e.g., cs.AI, physics.hep-th) or 'news' for news articles.")
     score_reason: str = Field(..., description="A brief explanation for the assigned relevance score based on the user's profile.")
     relevance_score: int = Field(..., ge=0, le=100, description="Score from 0 to 100 indicating relevance to the user profile. Higher means more relevant.")
-    abstract_url: HttpUrl = Field(..., description="The URL link to the article's abstract page on ArXiv.")
+    abstract_url: HttpUrl = Field(..., description="The URL link to the article's abstract page on ArXiv or news URL.")
     html_url: Optional[HttpUrl] = Field(None, description="Optional URL link to an HTML version of the article, if available.")
-    pdf_url: HttpUrl = Field(..., description="The URL link to the article's PDF version on ArXiv.")
+    pdf_url: Optional[HttpUrl] = Field(None, description="The URL link to the article's PDF version on ArXiv. Not applicable for news.")
+    
+    # News-specific fields
+    type: ContentType = Field(default=ContentType.PAPER, description="Content type: paper or news")
+    source: Optional[str] = Field(None, description="News source name")
+    published_at: Optional[str] = Field(None, description="Publication timestamp")
+    url_to_image: Optional[str] = Field(None, description="Article image URL")
+    full_content: Optional[str] = Field(None, description="Full extracted content")
+    content_preview: Optional[str] = Field(None, description="Content preview")
+    extraction_success: Optional[bool] = Field(None, description="Whether content extraction succeeded")
+    relevance_score_normalized: Optional[float] = Field(None, ge=0, le=1, description="Normalized relevance score")
 
     @field_validator("authors", mode="before")
     @classmethod
@@ -50,6 +65,17 @@ class RankedArticle(BaseModel):
     @classmethod
     def ensure_title(cls, v):
         return str(v) if v else "Untitled Article"
+    
+    @field_validator('published_at')
+    @classmethod
+    def parse_published_date(cls, v):
+        if v and isinstance(v, str):
+            try:
+                # Parse ISO format
+                return datetime.fromisoformat(v.replace('Z', '+00:00')).isoformat()
+            except:
+                return v
+        return v
 
     @property
     def arxiv_id(self) -> str | None:
@@ -70,14 +96,20 @@ class RankedArticle(BaseModel):
 
 class ArticleAnalysis(BaseModel):
     """Analysis result for a single article."""
-    title: str = Field(..., description="The exact title of the analyzed ArXiv article.")
+    title: str = Field(..., description="The exact title of the analyzed article.")
     authors: List[str] = Field(..., description="List of author names for the analyzed article.")
     subject: str = Field(..., description="The primary subject category of the analyzed article.")
     abstract_url: HttpUrl = Field(..., description="The URL link to the article's abstract page.")
     html_url: Optional[HttpUrl] = Field(None, description="Optional URL link to an HTML version, if available.")
-    pdf_url: HttpUrl = Field(..., description="The URL link to the article's PDF version.")
+    pdf_url: Optional[HttpUrl] = Field(None, description="The URL link to the article's PDF version. Not applicable for news.")
     relevance_score: int = Field(..., ge=0, le=100, description="The previously assigned relevance score (0-100).")
     score_reason: str = Field(..., description="The reason for the relevance score.")
+    
+    # Content type field to distinguish papers from news
+    type: ContentType = Field(default=ContentType.PAPER, description="Content type: paper or news")
+    source: Optional[str] = Field(None, description="News source name")
+    published_at: Optional[str] = Field(None, description="Publication timestamp")
+    url_to_image: Optional[str] = Field(None, description="Article image URL")
 
     # Analysis specific fields
     summary: str = Field(..., description="A concise summary of the article's key findings and contributions.")
@@ -104,6 +136,7 @@ class UserContext(BaseModel):
     name: str
     title: str
     goals: str
+    news_interest: Optional[str] = Field(None, description="Specific topic of interest for news articles")
 
 
 class AgentStateModel(BaseModel):
