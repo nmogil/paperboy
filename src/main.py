@@ -209,8 +209,9 @@ async def timeout_middleware(request: Request, call_next):
     """Add timeout to all requests."""
     try:
         timeout_value = int(os.getenv('REQUEST_TIMEOUT', '295'))  # 5s buffer before Cloud Run's 300s
-        # Use asyncio.wait_for for Python 3.10 compatibility
-        return await asyncio.wait_for(call_next(request), timeout=timeout_value)
+        # Use asyncio.timeout for Python 3.11+
+        async with asyncio.timeout(timeout_value):
+            return await call_next(request)
     except asyncio.TimeoutError:
         logger.error(f"Request timeout after {timeout_value} seconds: {request.url.path}")
         from fastapi.responses import JSONResponse
@@ -224,11 +225,9 @@ async def safe_background_task(task_id: str, *args, **kwargs):
     """Wrapper for background tasks with timeout and error handling."""
     try:
         task_timeout = int(os.getenv('TASK_TIMEOUT', '295'))
-        # Use asyncio.wait_for for Python 3.10 compatibility
-        await asyncio.wait_for(
-            app.state.digest_service.generate_digest(task_id, *args, **kwargs),
-            timeout=task_timeout
-        )
+        # Use asyncio.timeout for Python 3.11+
+        async with asyncio.timeout(task_timeout):
+            await app.state.digest_service.generate_digest(task_id, *args, **kwargs)
     except asyncio.TimeoutError:
         await app.state.state_manager.update_task(
             task_id,
@@ -404,8 +403,12 @@ async def readiness_check():
     
     # Check Supabase connectivity
     try:
-        await app.state.supabase_client.table('digest_tasks').select("count").limit(1).execute()
-        checks["supabase"] = "healthy"
+        response = app.state.supabase_client.table('digest_tasks').select("count").limit(1).execute()
+        if response:
+            checks["supabase"] = "healthy"
+        else:
+            checks["supabase"] = "unhealthy: no response"
+            overall_healthy = False
     except Exception as e:
         checks["supabase"] = f"unhealthy: {str(e)}"
         overall_healthy = False

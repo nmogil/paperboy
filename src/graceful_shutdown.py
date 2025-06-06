@@ -93,7 +93,7 @@ class GracefulShutdown:
         # Run shutdown tasks
         await self._run_shutdown_tasks()
     
-    def register_shutdown_task(self, task: asyncio.coroutine) -> None:
+    def register_shutdown_task(self, task) -> None:
         """Register a coroutine to run during shutdown."""
         self._shutdown_tasks.append(task)
     

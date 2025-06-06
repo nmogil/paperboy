@@ -1,5 +1,5 @@
 # Lightweight Dockerfile for Cloud Run deployment
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -47,7 +47,7 @@ EXPOSE 8080
 
 # Health check for Cloud Run
 HEALTHCHECK --interval=43200s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/diagnostics/logfire-health || exit 1
+    CMD curl -f http://localhost:${PORT}/health || exit 1
 
 # Command to run the application
 CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port ${PORT} --log-level info"]
