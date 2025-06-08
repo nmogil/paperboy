@@ -19,6 +19,7 @@ from .news_fetcher import NewsAPIFetcher
 from .content_extractor import TavilyExtractor
 from .query_generator import QueryGenerator
 from .circuit_breaker import ServiceCircuitBreakers, CircuitOpenError
+from .fetch_service import DailySourcesManager
 
 
 
@@ -31,6 +32,7 @@ class EnhancedDigestService:
         self.llm_client = LLMClient()
         self.fetcher = ArxivFetcher()
         self.state_manager = TaskStateManager()
+        self.daily_sources_manager = None  # Will be injected from main.py
         
         # Always initialize circuit breakers with reasonable defaults
         # This will be injected from main.py if available, otherwise use in-memory fallback
@@ -185,44 +187,78 @@ class EnhancedDigestService:
             logfire.error(f"Error simplifying content: {e}")
             return text[:max_length] if len(text) > max_length else text
 
-    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None, digest_sources: Optional[Dict[str, bool]] = None, top_n_news: int = None) -> None:
-        """Generate a complete digest for the user with circuit breaker protection."""
+    async def _load_daily_sources(self, source_date: str = None) -> Optional[Dict[str, Any]]:
+        """Load daily sources from the database."""
+        if not self.daily_sources_manager:
+            logfire.error("Daily sources manager not initialized")
+            return None
+        
+        try:
+            if source_date:
+                # Load sources for specific date
+                sources = await self.daily_sources_manager.get_sources_for_date(source_date)
+                if sources:
+                    logfire.info("Loaded sources for specific date", extra={"source_date": source_date})
+                    return sources
+                else:
+                    logfire.warn("No sources found for specified date", extra={"source_date": source_date})
+                    return None
+            else:
+                # Load latest available sources
+                sources = await self.daily_sources_manager.get_latest_sources()
+                if sources:
+                    logfire.info("Loaded latest available sources", extra={"source_date": sources.get('source_date')})
+                    return sources
+                else:
+                    logfire.warn("No sources available")
+                    return None
+                    
+        except Exception as e:
+            logfire.error("Failed to load daily sources", extra={"error": str(e), "source_date": source_date})
+            return None
+
+    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None, digest_sources: Optional[Dict[str, bool]] = None, top_n_news: int = None, source_date: str = None) -> None:
+        """Generate a complete digest for the user using pre-fetched sources."""
         try:
             # Set default digest sources if not provided
             if digest_sources is None:
                 digest_sources = {"arxiv": True, "news_api": settings.news_enabled}
             
-            await self.state_manager.update_task(
+            # Determine which source date to use (source_date parameter takes precedence over target_date)
+            effective_source_date = source_date or target_date
+            
+            await self.state_manager.update_task_with_source_date(
                 task_id,
-                DigestStatus(status=TaskStatus.PROCESSING, message="Fetching content...")
+                DigestStatus(status=TaskStatus.PROCESSING, message="Loading pre-fetched sources..."),
+                source_date=effective_source_date
             )
 
-            # Fetch papers if enabled
+            # Load pre-fetched sources
+            daily_sources = await self._load_daily_sources(effective_source_date)
+            if not daily_sources:
+                error_msg = f"No pre-fetched sources available for date: {effective_source_date or 'latest'}"
+                await self._complete_task(task_id, error_msg, callback_url)
+                return
+            
+            # Extract sources based on digest preferences
             articles = []
-            if digest_sources.get("arxiv", True):
-                await self.state_manager.update_task(
-                    task_id,
-                    DigestStatus(status=TaskStatus.PROCESSING, message="Fetching papers...")
-                )
-                articles = await self._fetch_papers_with_breaker(user_info.get('categories', ['cs.AI', 'cs.LG']), target_date)
-                logfire.info("Fetched ArXiv articles", extra={"count": len(articles)})
-
-            # Fetch news if enabled
             news_articles = []
-            if digest_sources.get("news_api", False) and self.news_fetcher and self.content_extractor and self.query_generator:
-                await self.state_manager.update_task(
-                    task_id,
-                    DigestStatus(status=TaskStatus.PROCESSING, message="Fetching relevant news...")
-                )
-                news_articles = await self._fetch_news_with_breaker(user_info, target_date, top_n_news)
-                logfire.info("Fetched news articles", extra={"count": len(news_articles)})
+            used_source_date = daily_sources.get('source_date')
+            
+            if digest_sources.get("arxiv", True):
+                articles = daily_sources.get('arxiv_papers', [])
+                logfire.info("Loaded ArXiv articles from pre-fetched sources", extra={"count": len(articles), "source_date": used_source_date})
+
+            if digest_sources.get("news_api", False):
+                news_articles = daily_sources.get('news_articles', [])
+                logfire.info("Loaded news articles from pre-fetched sources", extra={"count": len(news_articles), "source_date": used_source_date})
 
             # Combine articles and news
             all_content = articles + news_articles
 
             if not all_content:
                 sources_requested = [k for k, v in digest_sources.items() if v]
-                await self._complete_task(task_id, f"No content found for requested sources: {', '.join(sources_requested)}", callback_url)
+                await self._complete_task(task_id, f"No content found in pre-fetched sources for: {', '.join(sources_requested)}", callback_url)
                 return
 
             await self.state_manager.update_task(
@@ -252,7 +288,14 @@ class EnhancedDigestService:
             # Generate HTML digest
             digest_html = self._generate_html(analyzed_articles, user_info)
 
-            await self._complete_task(task_id, digest_html, callback_url, analyzed_articles)
+            # Determine digest type
+            digest_type = "mixed"
+            if articles and not news_articles:
+                digest_type = "papers_only"
+            elif news_articles and not articles:
+                digest_type = "news_only"
+
+            await self._complete_task(task_id, digest_html, callback_url, analyzed_articles, used_source_date, digest_type)
 
         except CircuitOpenError as e:
             error_msg = f"Service temporarily unavailable: {str(e)}"
@@ -272,139 +315,6 @@ class EnhancedDigestService:
             if callback_url:
                 await self._send_callback(callback_url, task_id, "failed", str(e))
 
-    async def _fetch_papers_with_breaker(self, categories: List[str], target_date: str = None) -> List[Dict[str, Any]]:
-        """Fetch papers with circuit breaker protection."""
-        breaker = self.circuit_breakers.get('arxiv')
-        
-        try:
-            return await breaker.call(self._fetch_papers, categories, target_date)
-        except CircuitOpenError:
-            logfire.warn("ArXiv circuit breaker open, returning empty list")
-            return []
-
-    async def _fetch_papers(self, categories: List[str], target_date: str = None) -> List[Dict[str, Any]]:
-        """Fetch papers from arXiv with caching."""
-        # Check cache first
-        cache_key = f"arxiv:{','.join(categories)}:{target_date or 'latest'}"
-        if self.cache:
-            cached = await self.cache.get(cache_key)
-            if cached:
-                logfire.info("ArXiv cache hit", extra={"cache_key": cache_key})
-                return cached
-        
-        from .fetcher_lightweight import fetch_arxiv_cs_submissions
-        
-        if not target_date:
-            target_date = "2025-05-01"
-        
-        try:
-            all_articles = await fetch_arxiv_cs_submissions(target_date)
-            
-            if not all_articles:
-                logfire.warn("No articles found for date {target_date}", target_date=target_date)
-                return []
-            
-            # Normalize articles
-            for article in all_articles:
-                if 'primary_subject' in article and 'subject' not in article:
-                    article['subject'] = article['primary_subject']
-                
-                article.setdefault('subject', 'cs.AI')
-                article.setdefault('authors', ['Unknown'])
-            
-            # Cache the result
-            if self.cache:
-                await self.cache.set(cache_key, all_articles, use_persistent=True)
-            
-            logfire.info("Fetched {count} articles from arXiv", count=len(all_articles))
-            return all_articles
-            
-        except Exception as e:
-            logfire.error("Failed to fetch papers: {error}", error=str(e))
-            raise
-
-    async def _fetch_news_with_breaker(self, user_info: Dict[str, Any], target_date: Optional[str] = None, top_n_news: int = None) -> List[Dict[str, Any]]:
-        """Fetch news with circuit breaker protection."""
-        if not settings.news_enabled:
-            return []
-        
-        try:
-            # Generate queries with circuit breaker
-            queries = await self._generate_queries_with_breaker(user_info, target_date)
-            if not queries:
-                return []
-            
-            # Fetch news with circuit breaker
-            newsapi_breaker = self.circuit_breakers.get('newsapi')
-            raw_news = await newsapi_breaker.call(
-                self.news_fetcher.fetch_news,
-                queries=queries,
-                target_date=target_date,
-                max_articles=settings.news_max_articles
-            )
-            
-            if not raw_news:
-                return []
-            
-            # Rank news articles
-            top_news = await self._rank_news_articles(raw_news, user_info, top_n_news)
-            
-            if not top_news:
-                return []
-            
-            # Extract content with circuit breaker
-            tavily_breaker = self.circuit_breakers.get('tavily')
-            extracted_news = await tavily_breaker.call(
-                self.content_extractor.extract_articles,
-                top_news,
-                priority_indices=None
-            )
-            
-            return extracted_news
-            
-        except CircuitOpenError as e:
-            logfire.warn("News service circuit breaker open: {error}", error=str(e))
-            return []
-        except Exception as e:
-            logfire.error("Failed to fetch news: {error}", error=str(e))
-            return []
-
-    async def _generate_queries_with_breaker(self, user_info: Dict[str, Any], target_date: Optional[str]) -> List[str]:
-        """Generate queries with circuit breaker protection."""
-        breaker = self.circuit_breakers.get('openai')
-        
-        try:
-            return await breaker.call(
-                self.query_generator.generate_queries,
-                user_info,
-                target_date
-            )
-        except CircuitOpenError:
-            # Fallback to simple queries
-            logfire.warn("Query generation circuit breaker open, using fallback queries")
-            return self._get_fallback_queries(user_info)
-
-    def _get_fallback_queries(self, user_info: Dict[str, Any]) -> List[str]:
-        """Generate simple fallback queries without LLM."""
-        queries = []
-        
-        # Add news interest if specified
-        news_interest = user_info.get('news_interest')
-        if news_interest:
-            queries.append(news_interest)
-        
-        # Add goals-based queries
-        goals = user_info.get('goals', '')
-        if 'AI' in goals.upper():
-            queries.append('artificial intelligence news')
-        if 'machine learning' in goals.lower():
-            queries.append('machine learning breakthrough')
-        
-        # Default queries
-        if not queries:
-            queries = ['AI technology news', 'tech industry updates']
-        
-        return queries[:5]
 
     async def _rank_content_with_breaker(
         self,
@@ -1171,17 +1081,21 @@ News Articles to rank:
         task_id: str,
         result: str,
         callback_url: str = None,
-        articles: List[ArticleAnalysis] = None
+        articles: List[ArticleAnalysis] = None,
+        source_date: str = None,
+        digest_type: str = None
     ) -> None:
         """Mark task as completed and send callback if needed."""
-        await self.state_manager.update_task(
+        await self.state_manager.update_task_with_source_date(
             task_id,
             DigestStatus(
                 status=TaskStatus.COMPLETED,
                 message="Digest generated successfully",
                 result=result,
                 articles=articles
-            )
+            ),
+            source_date=source_date,
+            digest_type=digest_type
         )
 
         if callback_url:

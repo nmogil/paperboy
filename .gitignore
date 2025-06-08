@@ -22,6 +22,7 @@ node_modules/
 config/.env
 config/.env.*
 !config/.env.example
+.mcp.json
 
 # Editor directories and files
 .idea
