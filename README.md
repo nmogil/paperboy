@@ -7,44 +7,56 @@ An AI-powered academic paper recommendation system that ranks and analyzes arXiv
 ```
 paperboy/
 ├── src/                          # Source code
-│   ├── agent.py                 # Core AI logic using Pydantic AI
-│   ├── agent_prompts.py         # Structured LLM prompts for JSON output
-│   ├── agent_tools_lightweight.py # Article content extraction (httpx-based)
 │   ├── api_models.py            # FastAPI request/response models
+│   ├── cache.py                 # In-memory cache with TTL (fallback)
+│   ├── cache_supabase.py        # Hybrid cache with Supabase persistence
+│   ├── circuit_breaker.py       # Circuit breaker pattern for external services
 │   ├── config.py                # Centralized configuration via Pydantic BaseSettings
+│   ├── content_extractor.py     # Tavily API for full article content extraction
+│   ├── digest_service_enhanced.py # Orchestrates the full digest generation workflow
+│   ├── fetch_service.py         # Daily content fetching and storage with background processing
 │   ├── fetcher_lightweight.py   # arXiv web scraping using httpx
+│   ├── graceful_shutdown.py     # Proper handling of shutdown signals
+│   ├── llm_client.py            # Direct OpenAI integration for ranking and analysis
 │   ├── main.py                  # FastAPI application with background tasks
+│   ├── metrics.py               # Performance monitoring and API call tracking
 │   ├── models.py                # Pydantic models for type safety
+│   ├── news_fetcher.py          # NewsAPI integration with intelligent query generation
+│   ├── query_generator.py       # Smart news query generation based on user profiles
 │   ├── security.py              # API key authentication middleware
-
+│   └── state_supabase.py        # Supabase-based distributed state management
 ├── config/                      # Configuration files
-│   ├── settings.py             # Additional configuration settings
 │   └── .env                    # Environment variables (create from .env.example)
 ├── data/                       # Data persistence
-│   ├── agent_state.json        # Agent state storage
-│   ├── test_state.json         # Test data
-│   └── arxiv_cs_submissions_2025-04-01.json # Sample arXiv data
-├── archived_full_implementation/ # Archived Playwright-based implementation
+│   └── (various state files)   # Local JSON state storage (when Supabase not used)
+├── archived/                   # Archived implementations
+│   └── agent_implementation/   # Original Pydantic AI agent code
+├── pipedream/                  # Webhook integrations
+│   └── trigger-generate-digest.js # Batch user processing webhook
+├── templates/                  # (Reserved for future HTML templates)
 ├── Dockerfile                  # Production Docker configuration
-├── docker-compose.lightweight.yaml # Lightweight Docker Compose
-├── requirements.lightweight.txt # Lightweight dependencies (httpx)
+├── docker-compose.yaml         # Docker Compose configuration
+├── requirements.lightweight.txt # Lightweight dependencies
 ├── deploy_cloudrun.sh          # Google Cloud Run deployment script
 ├── cloudbuild.yaml             # Google Cloud Build configuration
-└── CLAUDE.md                   # AI assistant instructions
+├── CLAUDE.md                   # AI assistant instructions
+└── PROJECT_ARCH.md             # Detailed architecture documentation
 ```
 
 ## Features
 
 ### 🧠 AI-Powered Analysis
 
-- **Intelligent Ranking**: Uses OpenAI models (GPT-4 by default) to rank papers by relevance to user research profile
-- **Detailed Analysis**: Provides in-depth analysis of top papers with reasoning and key insights
-- **Personalized Recommendations**: Tailors suggestions based on user's research goals and academic background
-- **HTML Digest Generation**: Creates formatted research digests with structured analysis
+- **Intelligent Ranking**: Uses OpenAI models to rank papers and news by relevance to user research profile
+- **Mixed Content Sources**: Combines arXiv papers with industry news for comprehensive coverage
+- **Detailed Analysis**: Provides in-depth analysis of top content with reasoning and key insights
+- **Personalized Recommendations**: Tailors suggestions based on user's research goals and role
+- **HTML Digest Generation**: Creates beautifully formatted digests with separate sections for papers and news
 
 ### 🚀 Production-Ready API
 
 - **Asynchronous Processing**: Background task execution for long-running digest generation
+- **Two-Phase Operation**: Separate source fetching and digest generation for flexibility
 - **RESTful Endpoints**: Clean API design with status tracking and health checks
 - **API Authentication**: Secure access via API key middleware
 - **Webhook Support**: Optional callback URLs for task completion notifications
@@ -53,17 +65,20 @@ paperboy/
 ### 🐳 Cloud-Native Deployment
 
 - **Docker Support**: Lightweight containers with security best practices
-- **Google Cloud Run**: One-click deployment with included configuration
-- **Auto-Scaling**: Handles variable workloads efficiently
+- **Google Cloud Run**: One-click deployment with automatic scaling
+- **Supabase Integration**: Distributed state management for higher concurrency
+- **Circuit Breakers**: Graceful degradation when external services fail
+- **Graceful Shutdown**: Proper SIGTERM handling for Cloud Run
 - **Health Monitoring**: Built-in health checks and optional Logfire integration
-- **Resource Limits**: Optimized for cloud environments with proper resource constraints
 
 ### 📊 Data Pipeline
 
+- **Daily Source Fetching**: Pre-fetch content for faster digest generation
 - **arXiv Integration**: Automated fetching and parsing of academic papers
-- **Web Scraping**: Robust content extraction using httpx (lightweight) or Playwright (full)
-- **Content Processing**: Intelligent truncation and formatting for LLM analysis
-- **State Persistence**: JSON-based storage for task tracking and results
+- **News Integration**: NewsAPI with intelligent query generation
+- **Content Extraction**: Tavily API for full article content with prioritization
+- **State Persistence**: Supabase for distributed state with JSON fallback
+- **Caching**: Hybrid two-tier cache system for performance
 
 ### 🛠 Developer Experience
 
@@ -105,6 +120,8 @@ Required environment variables:
 ```env
 OPENAI_API_KEY=your_openai_api_key_here
 API_KEY=your_secure_api_key_for_authentication
+SUPABASE_URL=your_supabase_project_url    # For distributed state
+SUPABASE_KEY=your_supabase_anon_key      # For distributed state
 ```
 
 ### 3. Run with Docker
@@ -114,7 +131,7 @@ API_KEY=your_secure_api_key_for_authentication
 docker-compose up --build
 
 # Or run in background
-docker-compose -f docker-compose.lightweight.yaml up -d --build
+docker-compose up -d --build
 ```
 
 ### 4. Access the API
@@ -146,27 +163,37 @@ All configuration is managed via environment variables in `config/.env`. The sys
 | ---------------- | ------------------------------------ | -------- | -------- |
 | `OPENAI_API_KEY` | OpenAI API access token              | -        | ✅       |
 | `API_KEY`        | Authentication key for API endpoints | -        | ✅       |
+| `SUPABASE_URL`   | Supabase project URL                 | -        | ✅       |
+| `SUPABASE_KEY`   | Supabase anon key                    | -        | ✅       |
 | `OPENAI_MODEL`   | OpenAI model to use                  | `gpt-4o` |          |
-| `TOP_N_ARTICLES` | Number of articles to analyze        | `5`      |          |
+| `TOP_N_ARTICLES` | Number of papers to analyze          | `5`      |          |
+| `TOP_N_NEWS`     | Number of news articles to analyze   | `5`      |          |
 | `LOG_LEVEL`      | Logging verbosity                    | `INFO`   |          |
 
 ### Performance & Limits
 
 | Variable                     | Description                          | Default |
 | ---------------------------- | ------------------------------------ | ------- |
-| `CRAWLER_TIMEOUT`            | Web scraping timeout (ms)            | `25000` |
 | `HTTP_TIMEOUT`               | HTTP request timeout (seconds)       | `30`    |
 | `TASK_TIMEOUT`               | Max digest generation time (seconds) | `300`   |
 | `AGENT_RETRIES`              | LLM retry attempts                   | `2`     |
-| `ANALYSIS_CONTENT_MAX_CHARS` | Max content per article for analysis | `8000`  |
-| `RANKING_INPUT_MAX_ARTICLES` | Max articles sent to ranking LLM     | `20`    |
+| `ANALYSIS_CONTENT_MAX_CHARS` | Max content per article for analysis | `20000` |
+| `RANKING_INPUT_MAX_ARTICLES` | Max articles sent to ranking LLM     | `30`    |
+| `SUMMARY_MAX_CONCURRENT`     | Max concurrent summary generation    | `3`     |
+| `EXTRACT_MAX_CONCURRENT`     | Max concurrent content extraction    | `3`     |
 
 ### Optional Features
 
-| Variable          | Description                     | Default |
-| ----------------- | ------------------------------- | ------- |
-| `USE_LIGHTWEIGHT` | Use httpx instead of Playwright | `true`  |
-| `LOGFIRE_TOKEN`   | Monitoring service token        | -       |
+| Variable              | Description                       | Default |
+| --------------------- | --------------------------------- | ------- |
+| `NEWS_ENABLED`        | Enable news fetching              | `true`  |
+| `NEWSAPI_KEY`         | NewsAPI key for news              | -       |
+| `TAVILY_API_KEY`      | Tavily key for content extraction | -       |
+| `NEWS_MAX_ARTICLES`   | Max news articles to fetch        | `50`    |
+| `NEWS_MAX_EXTRACT`    | Max articles to extract content   | `10`    |
+| `NEWS_CACHE_TTL`      | News cache duration (seconds)     | `3600`  |
+| `USE_LIGHTWEIGHT`     | Use httpx instead of Playwright   | `true`  |
+| `LOGFIRE_TOKEN`       | Monitoring service token          | -       |
 
 ## API Usage
 
@@ -180,9 +207,30 @@ curl -H "X-API-Key: your_api_key_from_env" http://localhost:8000/endpoint
 
 ### Core Workflow
 
+#### Option 1: Direct Digest Generation
 1. **Submit a digest request** → Get task ID immediately
 2. **Poll for status** → Track progress and get results
 3. **Optional webhooks** → Receive notifications when complete
+
+#### Option 2: Two-Phase Operation (Recommended for batch processing)
+1. **Fetch sources daily** → Pre-fetch content for a specific date
+2. **Generate digests** → Use pre-fetched sources for faster generation
+3. **Poll for status** → Track progress and get results
+
+### Fetch Daily Sources (Optional)
+
+**POST** `/fetch-sources`
+
+Pre-fetch sources for a specific date to speed up digest generation.
+
+```bash
+curl -X POST http://localhost:8000/fetch-sources \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_date": "2025-01-07"
+  }'
+```
 
 ### Generate Research Digest
 
@@ -198,13 +246,15 @@ curl -X POST http://localhost:8000/generate-digest \
     "user_info": {
       "name": "Dr. Jane Smith",
       "title": "Machine Learning Researcher",
-      "goals": "Exploring latest developments in transformer architectures and efficient training methods"
+      "goals": "Exploring latest developments in transformer architectures and efficient training methods",
+      "news_interest": "AI industry trends and breakthrough technologies"
     },
-    "target_date": "2025-05-01",
+    "source_date": "2025-01-07",  # Use pre-fetched sources
     "top_n_articles": 5,
+    "top_n_news": 5,
     "digest_sources": {
       "arxiv": true,
-      "news_api": false
+      "news_api": true
     },
     "callback_url": "https://your-app.com/webhooks/digest-complete"
   }'
@@ -212,13 +262,15 @@ curl -X POST http://localhost:8000/generate-digest \
 
 #### Request Parameters
 
-| Parameter        | Type    | Required | Description                                |
-| ---------------- | ------- | -------- | ------------------------------------------ |
-| `user_info`      | Object  | Yes      | User profile with name, title, and goals   |
-| `target_date`    | String  | No       | Target date for content (YYYY-MM-DD)       |
-| `top_n_articles` | Integer | No       | Number of articles to include (default: 5) |
-| `digest_sources` | Object  | No       | Control which sources to include in digest |
-| `callback_url`   | String  | No       | Webhook URL for completion notification    |
+| Parameter        | Type    | Required | Description                                           |
+| ---------------- | ------- | -------- | ----------------------------------------------------- |
+| `user_info`      | Object  | Yes      | User profile with name, title, goals, news_interest  |
+| `source_date`    | String  | No       | Use pre-fetched sources from this date (YYYY-MM-DD)  |
+| `target_date`    | String  | No       | Target date for content if fetching (YYYY-MM-DD)     |
+| `top_n_articles` | Integer | No       | Number of papers to include (default: 5)             |
+| `top_n_news`     | Integer | No       | Number of news articles to include (default: 5)      |
+| `digest_sources` | Object  | No       | Control which sources to include in digest           |
+| `callback_url`   | String  | No       | Webhook URL for completion notification              |
 
 #### Digest Sources Control
 
@@ -269,10 +321,21 @@ curl http://localhost:8000/digest-status/abc123 \
   "status": "completed",
   "result": {
     "digest_html": "<html>...</html>",
-    "articles_analyzed": 5,
+    "articles_analyzed": 10,
+    "source_date": "2025-01-07",
+    "digest_type": "mixed",
     "generation_time": "2024-03-20T10:30:00Z"
   }
 }
+```
+
+### Check Fetch Status
+
+**GET** `/fetch-status/{task_id}`
+
+```bash
+curl http://localhost:8000/fetch-status/xyz789 \
+  -H "X-API-Key: your_api_key"
 ```
 
 ### Health Check
@@ -337,12 +400,19 @@ For production deployments, ensure these variables are properly set:
 # Required
 OPENAI_API_KEY=sk-...
 API_KEY=your-secure-random-key
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-supabase-anon-key
 
 # Recommended production settings
-OPENAI_MODEL=gpt-4o
+OPENAI_MODEL=gpt-4o-mini
 LOG_LEVEL=INFO
 TASK_TIMEOUT=300
 USE_LIGHTWEIGHT=true
+
+# Optional news integration
+NEWS_ENABLED=true
+NEWSAPI_KEY=your-newsapi-key
+TAVILY_API_KEY=your-tavily-key
 
 # Optional monitoring
 LOGFIRE_TOKEN=your-logfire-token
@@ -371,9 +441,14 @@ pytest tests/integration_test.py
 The system follows a modular design:
 
 - **`main.py`**: FastAPI app with background task handling
-- **`agent.py`**: Core AI logic using Pydantic AI for ranking/analysis
+- **`digest_service_enhanced.py`**: Orchestrates the full digest generation workflow
+- **`llm_client.py`**: Direct OpenAI integration for ranking and analysis
 - **`fetcher_lightweight.py`**: arXiv paper fetching with httpx
-- **`agent_tools_lightweight.py`**: Content extraction and processing
+- **`news_fetcher.py`**: NewsAPI integration with intelligent query generation
+- **`content_extractor.py`**: Tavily API for full article content extraction
+- **`fetch_service.py`**: Daily content fetching and storage
+- **`state_supabase.py`**: Distributed state management
+- **`circuit_breaker.py`**: Graceful degradation when services fail
 - **`models.py`**: Type-safe Pydantic models throughout
 - **`config.py`**: Centralized environment-based configuration
 
@@ -450,8 +525,10 @@ curl -H "X-API-Key: your_api_key" http://localhost:8000/digest-status/health
 # Out of memory or context limits
 # ✅ Adjust these in config/.env:
 RANKING_INPUT_MAX_ARTICLES=10        # Reduce articles sent to LLM
-ANALYSIS_CONTENT_MAX_CHARS=4000      # Reduce content per article
-OPENAI_MODEL=gpt-3.5-turbo          # Use cheaper model
+ANALYSIS_CONTENT_MAX_CHARS=10000     # Reduce content per article
+OPENAI_MODEL=gpt-4o-mini            # Use cheaper model
+TOP_N_ARTICLES=3                     # Reduce papers analyzed
+TOP_N_NEWS=3                         # Reduce news analyzed
 
 # Timeout issues
 TASK_TIMEOUT=600                     # Increase timeout

@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     extract_max_concurrent: int = Field(default=3, validation_alias='EXTRACT_MAX_CONCURRENT')
     extract_timeout: int = Field(default=10, validation_alias='EXTRACT_TIMEOUT')
     
+    # Rate limiting and delays
+    ranking_delay: float = Field(default=0.7, validation_alias='RANKING_DELAY', description="Delay between ranking API calls in seconds")
+    summary_delay: float = Field(default=0.7, validation_alias='SUMMARY_DELAY', description="Delay between summary API calls in seconds")
+    summary_max_concurrent: int = Field(default=3, validation_alias='SUMMARY_MAX_CONCURRENT', description="Max concurrent summary generation")
+    
+    # Supabase Integration (essential for Cloud Run)
+    supabase_url: Optional[str] = Field(None, validation_alias='SUPABASE_URL')
+    supabase_key: Optional[str] = Field(None, validation_alias='SUPABASE_KEY')
+    use_supabase: bool = Field(default=True, validation_alias='USE_SUPABASE', description="Use Supabase for distributed state management (recommended for Cloud Run)")
+    
     # Caching
     news_cache_ttl: int = Field(default=3600, validation_alias='NEWS_CACHE_TTL')  # 1 hour
     

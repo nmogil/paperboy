@@ -100,6 +100,20 @@ class TavilyExtractor:
         
         return result
     
+    async def extract_single(self, url: str) -> Optional[Dict[str, Any]]:
+        """Extract content for a single URL with circuit breaker protection."""
+        if self._request_count >= self._request_limit:
+            logfire.warn("Tavily request limit reached, returning None")
+            return None
+        
+        try:
+            content = await self._extract_single(url)
+            self._request_count += 1
+            return {'content': content, 'extraction_success': True}
+        except Exception as e:
+            logfire.error(f"Failed to extract content for {url}: {str(e)}")
+            return None
+    
     async def _batch_extract(self, articles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Extract articles in batches."""
         tasks = []

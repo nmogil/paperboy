@@ -70,12 +70,19 @@ def get_supabase_client() -> Client:
 
 def validate_environment():
     """Validate required environment variables at startup."""
-    required_vars = [
-        'SUPABASE_URL', 'SUPABASE_KEY', 'OPENAI_API_KEY', 'API_KEY'
-    ]
+    required_vars = ['OPENAI_API_KEY', 'API_KEY']
     missing = [var for var in required_vars if not os.getenv(var)]
     if missing:
         raise RuntimeError(f"Missing required environment variables: {missing}")
+    
+    # Check Supabase variables only if Supabase is enabled
+    use_supabase = os.getenv('USE_SUPABASE', 'true').lower() == 'true'
+    if use_supabase:
+        supabase_vars = ['SUPABASE_URL', 'SUPABASE_KEY']
+        missing_supabase = [var for var in supabase_vars if not os.getenv(var)]
+        if missing_supabase:
+            logger.warning(f"Supabase is enabled but missing variables: {missing_supabase}. Falling back to local state management.")
+            os.environ['USE_SUPABASE'] = 'false'
 
 
 @asynccontextmanager
