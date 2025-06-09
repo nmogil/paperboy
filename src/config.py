@@ -38,9 +38,9 @@ class Settings(BaseSettings):
     extract_timeout: int = Field(default=10, validation_alias='EXTRACT_TIMEOUT')
     
     # Rate limiting and delays
-    ranking_delay: float = Field(default=0.7, validation_alias='RANKING_DELAY', description="Delay between ranking API calls in seconds")
-    summary_delay: float = Field(default=0.7, validation_alias='SUMMARY_DELAY', description="Delay between summary API calls in seconds")
-    summary_max_concurrent: int = Field(default=3, validation_alias='SUMMARY_MAX_CONCURRENT', description="Max concurrent summary generation")
+    ranking_delay: float = Field(default=0.3, validation_alias='RANKING_DELAY', description="Delay between ranking API calls in seconds")
+    summary_delay: float = Field(default=0.3, validation_alias='SUMMARY_DELAY', description="Delay between summary API calls in seconds")
+    summary_max_concurrent: int = Field(default=5, validation_alias='SUMMARY_MAX_CONCURRENT', description="Max concurrent summary generation")
     
     # Supabase Integration (essential for Cloud Run)
     supabase_url: Optional[str] = Field(None, validation_alias='SUPABASE_URL')
@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     
     # Monitoring configuration
     news_metrics_enabled: bool = Field(default=True, validation_alias='NEWS_METRICS_ENABLED')
+    
+    # Timeout configuration (critical for preventing timeouts)
+    task_timeout: int = Field(default=600, validation_alias='TASK_TIMEOUT', description="Max time for digest generation in seconds")
+    request_timeout: int = Field(default=595, validation_alias='REQUEST_TIMEOUT', description="HTTP request timeout for API endpoints")
+    http_timeout: int = Field(default=60, validation_alias='HTTP_TIMEOUT', description="General HTTP client timeout")
     
     @field_validator('newsapi_key', 'tavily_api_key')
     def validate_api_keys(cls, v, info):

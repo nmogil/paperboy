@@ -17,6 +17,9 @@ services:
       - LOG_LEVEL=INFO # Changed from WARNING to INFO for better debugging
       - UVICORN_ACCESS_LOG=1 # Enable access logs for debugging
       - UVICORN_LOG_LEVEL=info
+      - TASK_TIMEOUT=600 # 10 minutes for digest generation
+      - REQUEST_TIMEOUT=595 # Just under 10 minutes for HTTP requests
+      - HTTP_TIMEOUT=60 # 1 minute for general HTTP operations
     volumes:
       - ./config/.env:/app/config/.env:ro # Mount .env file as read-only
       - ./data:/app/data # Mount data directory for state persistence

@@ -84,8 +84,14 @@ class LLMClient:
                 logfire.error("Unexpected response format: no output")
                 raise ValueError("No output in response")
 
+            # Remove markdown code blocks if present
             if content.startswith("```json"):
                 content = content[7:]
+            elif content.startswith("```html"):
+                content = content[7:]
+            elif content.startswith("```"):
+                content = content[3:]
+                
             if content.endswith("```"):
                 content = content[:-3]
 
@@ -837,6 +843,34 @@ Content:
                 'url': article.get('url', '')
             }
 
+    def _clean_html_response(self, response: str) -> str:
+        """Clean and validate HTML response from LLM."""
+        if not response or not response.strip():
+            return ""
+        
+        # Remove any markdown code block artifacts
+        response = response.strip()
+        
+        # Remove markdown code blocks if present
+        if response.startswith('```html'):
+            response = response[7:].strip()
+        elif response.startswith('```'):
+            response = response[3:].strip()
+            
+        if response.endswith('```'):
+            response = response[:-3].strip()
+        
+        # Check if HTML is properly wrapped
+        if response.lower().startswith('<html'):
+            # Already has HTML tags, don't double wrap
+            return response
+        elif response.lower().startswith('<!doctype'):
+            # Has doctype, also good
+            return response
+        else:
+            # Missing HTML wrapper, add it
+            return f"<html>\n{response}\n</html>"
+
     async def create_final_digest(
         self,
         summaries: List[Dict[str, Any]],
@@ -854,7 +888,9 @@ Requirements:
 5. Add a brief personalized introduction
 6. Sort by relevance score within each section
 
-Return ONLY the HTML content, starting with <html> and ending with </html>.
+CRITICAL: Return ONLY raw HTML content, starting with <html> and ending with </html>.
+Do NOT use markdown code blocks (```html). Return the raw HTML directly.
+
 Use this structure:
 - Professional CSS styling in <head>
 - Personalized greeting and overview
@@ -877,16 +913,27 @@ Make it scannable with:
         papers.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
         news.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
         
+        # Convert summaries to JSON-serializable format
+        def make_serializable(item):
+            """Convert any non-serializable objects to strings."""
+            if isinstance(item, dict):
+                return {k: str(v) if hasattr(v, '__str__') and not isinstance(v, (str, int, float, bool, type(None))) else v 
+                       for k, v in item.items()}
+            return item
+        
+        papers_serializable = [make_serializable(paper) for paper in papers]
+        news_serializable = [make_serializable(article) for article in news]
+
         user_prompt = f"""User Profile:
 Name: {user_info.get('name', 'User')}
 Role: {user_info.get('title', 'Researcher')}
 Goals: {user_info.get('goals', 'AI Research')}
 
 Research Papers ({len(papers)} items):
-{json.dumps(papers, indent=2)}
+{json.dumps(papers_serializable, indent=2)}
 
 Industry News ({len(news)} items):
-{json.dumps(news, indent=2)}
+{json.dumps(news_serializable, indent=2)}
 
 Create a cohesive HTML digest that tells a story about what's important for this user today."""
 
@@ -898,14 +945,17 @@ Create a cohesive HTML digest that tells a story about what's important for this
                 max_tokens=6000
             )
             
-            # Ensure valid HTML
-            if not response.strip().startswith('<html'):
-                response = f"<html>\n{response}\n</html>"
+            # Clean and validate HTML response
+            cleaned_html = self._clean_html_response(response)
+            
+            if not cleaned_html:
+                logfire.warning("Empty HTML response from LLM, using fallback")
+                return self._create_fallback_html(summaries, user_info)
                 
-            return response
+            return cleaned_html
         except Exception as e:
             logfire.error(f"Failed to create final digest: {str(e)}")
-            # Return basic HTML on failure
+            # Return enhanced fallback HTML on failure
             return self._create_fallback_html(summaries, user_info)
 
     def _create_fallback_html(self, summaries: List[Dict[str, Any]], user_info: Dict[str, Any]) -> str:

@@ -229,7 +229,7 @@ async def track_requests(request: Request, call_next):
 async def timeout_middleware(request: Request, call_next):
     """Add timeout to all requests."""
     try:
-        timeout_value = int(os.getenv('REQUEST_TIMEOUT', '295'))  # 5s buffer before Cloud Run's 300s
+        timeout_value = settings.request_timeout  # 5s buffer before Cloud Run's 300s
         # Use asyncio.timeout for Python 3.11+
         async with asyncio.timeout(timeout_value):
             return await call_next(request)
@@ -245,7 +245,7 @@ async def timeout_middleware(request: Request, call_next):
 async def safe_background_task(task_id: str, *args, **kwargs):
     """Wrapper for background tasks with timeout and error handling."""
     try:
-        task_timeout = int(os.getenv('TASK_TIMEOUT', '295'))
+        task_timeout = settings.task_timeout
         # Use asyncio.timeout for Python 3.11+
         async with asyncio.timeout(task_timeout):
             await app.state.digest_service.generate_digest(task_id, *args, **kwargs)
@@ -266,7 +266,7 @@ async def safe_background_task(task_id: str, *args, **kwargs):
 async def safe_fetch_task(task_id: str, source_date: str, callback_url: str = None):
     """Wrapper for fetch tasks with timeout and error handling."""
     try:
-        task_timeout = int(os.getenv('TASK_TIMEOUT', '295'))
+        task_timeout = settings.task_timeout
         # Use asyncio.timeout for Python 3.11+
         async with asyncio.timeout(task_timeout):
             await app.state.fetch_service.fetch_and_store_sources(source_date, task_id, callback_url)
