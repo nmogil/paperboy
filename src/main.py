@@ -13,7 +13,7 @@ import os
 from typing import Dict, Any, Optional
 from supabase import create_client, Client
 
-from .api_models import GenerateDigestRequest, GenerateDigestResponse, DigestStatusResponse
+from .api_models import GenerateDigestRequest, GenerateDigestResponse, DigestStatusResponse, FetchSourcesRequest, FetchSourcesResponse, FetchStatusResponse
 from .digest_service_enhanced import EnhancedDigestService as DigestService
 from .models import TaskStatus, DigestStatus
 from .security import validate_api_key
@@ -24,6 +24,7 @@ from .state_supabase import TaskStateManager
 from .cache_supabase import HybridCache
 from .circuit_breaker import ServiceCircuitBreakers
 from .graceful_shutdown import GracefulShutdown, RequestTracker
+from .fetch_service import FetchSourcesService, DailySourcesManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +56,9 @@ def get_supabase_client() -> Client:
         if not supabase_url or not supabase_key:
             raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set")
         
+        # Create Supabase client with default settings
+        # Note: Custom httpx client configuration would require modifying the postgrest client
+        # which is not easily exposed in the current supabase-py version
         SUPABASE_CLIENT = create_client(supabase_url, supabase_key)
         logger.info("Supabase client initialized")
     
@@ -66,12 +70,19 @@ def get_supabase_client() -> Client:
 
 def validate_environment():
     """Validate required environment variables at startup."""
-    required_vars = [
-        'SUPABASE_URL', 'SUPABASE_KEY', 'OPENAI_API_KEY', 'API_KEY'
-    ]
+    required_vars = ['OPENAI_API_KEY', 'API_KEY']
     missing = [var for var in required_vars if not os.getenv(var)]
     if missing:
         raise RuntimeError(f"Missing required environment variables: {missing}")
+    
+    # Check Supabase variables only if Supabase is enabled
+    use_supabase = os.getenv('USE_SUPABASE', 'true').lower() == 'true'
+    if use_supabase:
+        supabase_vars = ['SUPABASE_URL', 'SUPABASE_KEY']
+        missing_supabase = [var for var in supabase_vars if not os.getenv(var)]
+        if missing_supabase:
+            logger.warning(f"Supabase is enabled but missing variables: {missing_supabase}. Falling back to local state management.")
+            os.environ['USE_SUPABASE'] = 'false'
 
 
 @asynccontextmanager
@@ -101,11 +112,21 @@ async def lifespan(app: FastAPI):
         persistent_ttl=int(os.getenv('CACHE_TTL', '3600'))  # 1 hour persistent
     )
     
+    # Initialize fetch sources service
+    app.state.fetch_service = FetchSourcesService(
+        app.state.supabase_client,
+        app.state.circuit_breakers
+    )
+    
+    # Initialize daily sources manager
+    app.state.daily_sources_manager = DailySourcesManager(app.state.supabase_client)
+    
     # Initialize digest service with enhanced components
     app.state.digest_service = DigestService()
     app.state.digest_service.state_manager = app.state.state_manager
     app.state.digest_service.circuit_breakers = app.state.circuit_breakers
     app.state.digest_service.cache = app.state.cache
+    app.state.digest_service.daily_sources_manager = app.state.daily_sources_manager
     
     # Start background tasks
     cleanup_task = asyncio.create_task(cleanup_old_tasks(app))
@@ -242,6 +263,29 @@ async def safe_background_task(task_id: str, *args, **kwargs):
         logger.exception(f"Task {task_id} failed with error: {e}")
 
 
+async def safe_fetch_task(task_id: str, source_date: str, callback_url: str = None):
+    """Wrapper for fetch tasks with timeout and error handling."""
+    try:
+        task_timeout = int(os.getenv('TASK_TIMEOUT', '295'))
+        # Use asyncio.timeout for Python 3.11+
+        async with asyncio.timeout(task_timeout):
+            await app.state.fetch_service.fetch_and_store_sources(source_date, task_id, callback_url)
+    except asyncio.TimeoutError:
+        await app.state.state_manager.update_fetch_task(
+            task_id,
+            "failed",
+            f"Fetch task timeout after {task_timeout} seconds"
+        )
+        logger.error(f"Fetch task {task_id} timed out after {task_timeout} seconds")
+    except Exception as e:
+        await app.state.state_manager.update_fetch_task(
+            task_id,
+            "failed",
+            f"Fetch task failed: {str(e)}"
+        )
+        logger.exception(f"Fetch task {task_id} failed with error: {e}")
+
+
 @app.post("/generate-digest", response_model=GenerateDigestResponse, dependencies=[Depends(validate_api_key)])
 async def generate_digest(
     request: GenerateDigestRequest,
@@ -265,11 +309,21 @@ async def generate_digest(
         "recent_focus": getattr(request.user_info, 'goals', None)
     }
     
-    # Create task with user info stored
-    await app.state.state_manager.create_task(
+    # Determine digest type
+    digest_type = "mixed"
+    if request.digest_sources:
+        if request.digest_sources.get("arxiv", True) and not request.digest_sources.get("news_api", False):
+            digest_type = "papers_only"
+        elif request.digest_sources.get("news_api", False) and not request.digest_sources.get("arxiv", True):
+            digest_type = "news_only"
+    
+    # Create task with user info and source info stored
+    await app.state.state_manager.create_task_with_source_date(
         task_id,
         DigestStatus(status=TaskStatus.PENDING, message="Task created"),
-        user_info=user_info
+        user_info=user_info,
+        source_date=request.source_date,
+        digest_type=digest_type
     )
     
     # Add task to background with request tracking
@@ -283,7 +337,8 @@ async def generate_digest(
                 request.target_date,
                 request.top_n_articles,
                 request.digest_sources,
-                request.top_n_news
+                request.top_n_news,
+                request.source_date
             )
     else:
         background_tasks.add_task(
@@ -294,7 +349,8 @@ async def generate_digest(
             request.target_date,
             request.top_n_articles,
             request.digest_sources,
-            request.top_n_news
+            request.top_n_news,
+            request.source_date
         )
 
     return GenerateDigestResponse(
@@ -322,6 +378,88 @@ async def get_digest_status(task_id: str) -> DigestStatusResponse:
         message=status.message,
         result=status.result,
         articles=articles_dict
+    )
+
+
+@app.post("/fetch-sources", response_model=FetchSourcesResponse, dependencies=[Depends(validate_api_key)])
+async def fetch_sources(
+    request: FetchSourcesRequest,
+    background_tasks: BackgroundTasks
+) -> FetchSourcesResponse:
+    """Fetch and store daily sources for the specified date."""
+    # Check if we're shutting down
+    if SHUTDOWN_HANDLER and SHUTDOWN_HANDLER.is_shutting_down():
+        raise HTTPException(status_code=503, detail="Service is shutting down")
+    
+    task_id = str(uuid.uuid4())
+    
+    # Create fetch task record
+    await app.state.state_manager.create_fetch_task(
+        task_id, 
+        request.source_date, 
+        str(request.callback_url) if request.callback_url else None
+    )
+    
+    # If callback_url is provided, process in background
+    if request.callback_url:
+        # Add task to background with request tracking
+        if SHUTDOWN_HANDLER:
+            async with SHUTDOWN_HANDLER.track_request(f"fetch-{task_id}"):
+                background_tasks.add_task(
+                    safe_fetch_task,
+                    task_id,
+                    request.source_date,
+                    str(request.callback_url)
+                )
+        else:
+            background_tasks.add_task(
+                safe_fetch_task,
+                task_id,
+                request.source_date,
+                str(request.callback_url)
+            )
+        
+        return FetchSourcesResponse(
+            task_id=task_id,
+            status="processing",
+            message="Fetch started in background",
+            source_date=request.source_date,
+            status_url=f"/fetch-status/{task_id}"
+        )
+    else:
+        # Process synchronously and wait for completion
+        try:
+            result = await app.state.fetch_service.fetch_and_store_sources(
+                request.source_date, 
+                task_id
+            )
+            
+            return FetchSourcesResponse(
+                task_id=task_id,
+                status=result["status"],
+                message=result["message"],
+                source_date=request.source_date
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch sources: {str(e)}")
+
+
+@app.get("/fetch-status/{task_id}", response_model=FetchStatusResponse, dependencies=[Depends(validate_api_key)])
+async def get_fetch_status(task_id: str) -> FetchStatusResponse:
+    """Check the status of a fetch sources task."""
+    task_data = await app.state.state_manager.get_fetch_task(task_id)
+
+    if not task_data:
+        raise HTTPException(status_code=404, detail="Fetch task not found")
+
+    return FetchStatusResponse(
+        task_id=task_id,
+        status=task_data["status"],
+        message=f"Fetch task {task_data['status']}",
+        source_date=task_data.get("source_date"),
+        result=task_data.get("result"),
+        error=task_data.get("error"),
+        callback_url=task_data.get("callback_url")
     )
 
 

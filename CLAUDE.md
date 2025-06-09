@@ -90,21 +90,22 @@ The codebase follows a modular architecture with clear separation of concerns:
 2. **Digest Service** (`digest_service_enhanced.py`): Orchestrates the full digest generation workflow
 3. **LLM Client** (`llm_client.py`): Direct OpenAI integration for ranking and analysis
 4. **Data Fetching** (`fetcher_lightweight.py`): Web scraping of arXiv using httpx
-5. **News Integration** (`news_fetcher.py`): NewsAPI integration with intelligent query generation
-6. **Content Extraction** (`content_extractor.py`): Tavily API for full article content extraction
-7. **Query Generation** (`query_generator.py`): Smart news query generation based on user profiles
-8. **Models** (`models.py`, `api_models.py`): Pydantic models for type safety across the system
-9. **Configuration** (`config.py`): Centralized settings management via Pydantic BaseSettings
-10. **State Management**:
+5. **Fetch Service** (`fetch_service.py`): Daily content fetching and storage with background processing
+6. **News Integration** (`news_fetcher.py`): NewsAPI integration with intelligent query generation
+7. **Content Extraction** (`content_extractor.py`): Tavily API for full article content extraction
+8. **Query Generation** (`query_generator.py`): Smart news query generation based on user profiles
+9. **Models** (`models.py`, `api_models.py`): Pydantic models for type safety across the system
+10. **Configuration** (`config.py`): Centralized settings management via Pydantic BaseSettings
+11. **State Management**:
 
     - `state_supabase.py`: Supabase-based distributed state management
 
-11. **Security** (`security.py`): API key authentication middleware
-12. **Caching**:
+12. **Security** (`security.py`): API key authentication middleware
+13. **Caching**:
     - `cache.py`: In-memory cache with TTL (fallback)
     - `cache_supabase.py`: Hybrid cache with Supabase persistence
-13. **Metrics** (`metrics.py`): Performance monitoring and API call tracking
-14. **Reliability**:
+14. **Metrics** (`metrics.py`): Performance monitoring and API call tracking
+15. **Reliability**:
     - `circuit_breaker.py`: Circuit breaker pattern for external services
     - `graceful_shutdown.py`: Proper handling of shutdown signals
 
@@ -195,9 +196,22 @@ Production containers implement:
 
 ### API Workflow
 
-1. **POST `/generate-digest`** → Returns task_id immediately
+#### Two-Phase Operation
+
+**Phase 1: Daily Source Fetching**
+1. **POST `/fetch-sources`** → Returns task_id immediately
 2. **Background Process**:
-   - Fetch arXiv papers + news articles (parallel)
+   - Fetch arXiv papers for specified date
+   - Fetch news articles (if enabled)
+   - Store sources in Supabase daily_sources table
+3. **GET `/fetch-status/{task_id}`** → Check fetch progress/results
+
+**Phase 2: Digest Generation**
+1. **POST `/generate-digest`** → Returns task_id immediately
+   - Can specify `source_date` to use pre-fetched sources
+   - Falls back to real-time fetching if no date specified
+2. **Background Process**:
+   - Retrieve sources (from storage or fetch on-demand)
    - Rank mixed content by relevance
    - Extract full content for top items
    - Analyze with GPT models
@@ -214,8 +228,9 @@ Production containers implement:
 - News fetching gracefully degrades if APIs are unavailable
 - Content extraction is prioritized for high-relevance articles
 - The archived full implementation with Playwright/crawl4ai is in `archived/`
-- **Missing Supabase Schema**: The deployment mentions `supabase_setup.sql` but this file doesn't exist - you'll need to create tables manually
+- **Missing Supabase Schema**: The deployment mentions `supabase_setup.sql` but this file doesn't exist - you'll need to create tables manually (including `daily_sources` and `fetch_tasks` for the fetch service)
 - **Pipedream Integration**: There's a webhook integration in `pipedream/trigger-generate-digest.js` for batch user processing
+- **Architecture Refactor**: See `DIGEST_REFACTOR_PLAN.md` for planned improvements to separate ranking and enhance content extraction
 
 ### Common Development Tasks
 
@@ -230,11 +245,17 @@ docker system prune
 # Check API health
 curl http://localhost:8000/digest-status/health
 
-# Test API with authentication
+# Test fetch sources API
+curl -X POST http://localhost:8000/fetch-sources \
+  -H "X-API-Key: your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{"source_date": "2025-01-07"}'
+
+# Test digest generation with pre-fetched sources
 curl -X POST http://localhost:8000/generate-digest \
   -H "X-API-Key: your_api_key" \
   -H "Content-Type: application/json" \
-  -d '{"user_info": {"name": "Test User", "title": "Researcher", "goals": "ML papers"}}'
+  -d '{"user_info": {"name": "Test User", "title": "Researcher", "goals": "ML papers"}, "source_date": "2025-01-07"}'
 
 # Deploy to Cloud Run with environment variables and Secret Manager
 export GCP_PROJECT_ID=your-project-id

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from typing import Any, Dict, List, Optional, Union
@@ -280,6 +281,157 @@ Articles:
             logfire.error(f"Structured ranking failed completely: {str(e)}")
             raise ValueError(f"Article ranking failed: {str(e)}")
 
+    async def rank_papers_only(
+        self,
+        papers: List[Dict[str, Any]],
+        user_info: Dict[str, Any],
+        top_n: int
+    ) -> List[RankedArticle]:
+        """Rank research papers separately based on user profile."""
+        primary_goals = user_info.get('goals', 'AI Research')
+        user_title = user_info.get('title', 'Researcher')
+        
+        system_prompt = f"""You are an expert research paper analyst. Your task is to rank academic papers based on their relevance to a user's research interests and background.
+
+Below is a list of academic papers in JSON format. Select the {top_n} most relevant papers based on the user profile.
+
+USER PROFILE ANALYSIS:
+- Primary Role: {user_title}
+- Primary research/learning goals: {primary_goals}
+
+RANKING STRATEGY for Research Papers:
+1. **Technical Relevance**: How directly does this paper relate to "{primary_goals}"?
+2. **Methodological Value**: Does this introduce methods/techniques applicable to their work?
+3. **Foundational Knowledge**: Does this advance understanding in their field of interest?
+4. **Practical Applications**: Can insights from this paper be applied in their role as {user_title}?
+5. **Learning Value**: Will this expand their knowledge in meaningful ways?
+
+You must return a structured response with an "articles" field containing exactly {top_n} selected papers.
+For each paper:
+- Return ALL the original fields from the input
+- Add relevance_score: Relevance score 0-100 (integer)
+- Add score_reason: Brief explanation of relevance that explains WHY this serves their specific goals
+- Ensure type field is set to "paper"
+
+CRITICAL INSTRUCTIONS:
+1. You MUST select exactly {top_n} papers
+2. Preserve ALL original paper metadata and fields
+3. Return them in descending order by relevance score
+4. Explain relevance in terms of the user's specific goals"""
+
+        user_prompt = f"""User profile:
+Name: {user_info.get('name', 'Researcher')}
+Title: {user_title}
+Primary Goals: {primary_goals}
+
+Papers:
+{json.dumps(papers, indent=2)}"""
+
+        # Add delay before API call
+        await asyncio.sleep(settings.ranking_delay)
+        
+        return await self._process_ranking_response(
+            system_prompt, user_prompt, top_n, "paper"
+        )
+
+    async def rank_news_only(
+        self,
+        news_articles: List[Dict[str, Any]],
+        user_info: Dict[str, Any],
+        top_n: int
+    ) -> List[RankedArticle]:
+        """Rank news articles separately based on user profile."""
+        primary_goals = user_info.get('goals', 'AI Research')
+        news_interest = user_info.get('news_interest', '')
+        user_title = user_info.get('title', 'Researcher')
+        
+        system_prompt = f"""You are an expert news analyst. Your task is to rank news articles based on their relevance to a user's interests and work.
+
+Below is a list of news articles in JSON format. Select the {top_n} most relevant articles based on the user profile.
+
+USER PROFILE ANALYSIS:
+- Primary Role: {user_title}
+- Primary goals: {primary_goals}
+{f"- Specific news interest: {news_interest}" if news_interest else ""}
+
+RANKING STRATEGY for News Articles:
+1. Articles directly related to the user's work, company, or industry
+2. Breaking news or developments in their field of interest
+3. Technology trends that align with their goals
+4. Industry insights that would be valuable for their role
+5. Timely information for professional awareness
+
+You must return a structured response with an "articles" field containing exactly {top_n} selected articles.
+For each article:
+- Return ALL the original fields from the input
+- Add relevance_score: Relevance score 0-100 (integer)
+- Add score_reason: Brief explanation of relevance
+- Ensure type field is set to "news"
+
+CRITICAL INSTRUCTIONS:
+1. You MUST select exactly {top_n} articles
+2. Preserve ALL original article metadata and fields
+3. Return them in descending order by relevance score"""
+
+        user_prompt = f"""User profile:
+Name: {user_info.get('name', 'User')}
+Title: {user_title}
+Goals: {primary_goals}
+{f"News Interest: {news_interest}" if news_interest else ""}
+
+News Articles:
+{json.dumps(news_articles, indent=2)}"""
+
+        # Add delay before API call
+        await asyncio.sleep(settings.ranking_delay)
+        
+        return await self._process_ranking_response(
+            system_prompt, user_prompt, top_n, "news"
+        )
+
+    async def _process_ranking_response(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        top_n: int,
+        content_type: str
+    ) -> List[RankedArticle]:
+        """Process ranking response and convert to RankedArticle objects."""
+        try:
+            response = await self._call_llm_structured(
+                system_prompt, 
+                user_prompt, 
+                RankingResponse,
+                temperature=0.3
+            )
+            
+            ranked_articles = []
+            
+            if isinstance(response, RankingResponse):
+                for article in response.articles[:top_n]:
+                    try:
+                        article_data = article.model_dump()
+                        article_data['type'] = content_type
+                        ranked_articles.append(RankedArticle(**article_data))
+                    except Exception as e:
+                        logfire.error(f"Failed to create RankedArticle: {str(e)}")
+                        continue
+            elif isinstance(response, list):
+                for item in response[:top_n]:
+                    try:
+                        item['type'] = content_type
+                        ranked_articles.append(RankedArticle(**item))
+                    except Exception as e:
+                        logfire.error(f"Failed to create RankedArticle from list: {str(e)}")
+                        continue
+            
+            logfire.info(f"Ranked {len(ranked_articles)} {content_type} items")
+            return ranked_articles
+            
+        except Exception as e:
+            logfire.error(f"Ranking failed for {content_type}: {str(e)}")
+            raise ValueError(f"Ranking failed: {str(e)}")
+
     async def rank_mixed_content(
         self,
         content: List[Dict[str, Any]],
@@ -535,6 +687,277 @@ Article Content (first 8000 chars):
             return ArticleAnalysis(**error_data)
 
 
+
+    async def summarize_single_paper(
+        self,
+        paper: Dict[str, Any],
+        user_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate a summary for a single research paper."""
+        system_prompt = """You are an expert at summarizing research papers for busy professionals.
+Create a concise, practical summary that focuses on what matters to the user.
+
+Your response MUST be a valid JSON object with this structure:
+{
+  "title": "<paper title>",
+  "authors": ["<author1>", "<author2>"],
+  "type": "paper",
+  "summary": "<2-3 sentences explaining the key contribution in simple terms>",
+  "why_relevant": "<1-2 sentences on why this matters to the user's work>",
+  "key_takeaway": "<The ONE most important thing to remember>",
+  "relevance_score": <original relevance score>,
+  "abstract_url": "<url>",
+  "pdf_url": "<url if available>"
+}
+
+Guidelines:
+- Use simple, conversational language
+- Focus on practical implications
+- Avoid academic jargon
+- Make it scannable and actionable"""
+
+        abstract = paper.get('abstract', paper.get('content_preview', ''))[:2000]
+        
+        user_prompt = f"""User Profile:
+Name: {user_info.get('name', 'User')}
+Role: {user_info.get('title', 'Researcher')}
+Goals: {user_info.get('goals', 'AI Research')}
+
+Paper Details:
+Title: {paper.get('title')}
+Authors: {', '.join(paper.get('authors', [])[:3])}
+Relevance Score: {paper.get('relevance_score', 0)}
+Relevance Reason: {paper.get('score_reason', '')}
+
+Abstract:
+{abstract}"""
+
+        # Add delay
+        await asyncio.sleep(settings.summary_delay)
+        
+        try:
+            response = await self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=1000)
+            summary_data = json.loads(response)
+            
+            # Ensure required fields
+            summary_data['type'] = 'paper'
+            summary_data['relevance_score'] = paper.get('relevance_score', 0)
+            summary_data['abstract_url'] = paper.get('abstract_url', paper.get('url', ''))
+            summary_data['pdf_url'] = paper.get('pdf_url')
+            
+            return summary_data
+        except Exception as e:
+            logfire.error(f"Failed to summarize paper: {str(e)}")
+            # Return basic info on failure
+            return {
+                'title': paper.get('title', 'Unknown'),
+                'authors': paper.get('authors', []),
+                'type': 'paper',
+                'summary': 'Summary generation failed',
+                'why_relevant': paper.get('score_reason', ''),
+                'key_takeaway': 'Please review the paper directly',
+                'relevance_score': paper.get('relevance_score', 0),
+                'abstract_url': paper.get('abstract_url', paper.get('url', '')),
+                'pdf_url': paper.get('pdf_url')
+            }
+
+    async def summarize_single_news(
+        self,
+        article: Dict[str, Any],
+        full_content: str,
+        user_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Generate a summary for a single news article."""
+        system_prompt = """You are an expert at summarizing tech news for busy professionals.
+Create a concise, practical summary that focuses on what matters to the user.
+
+Your response MUST be a valid JSON object with this structure:
+{
+  "title": "<article title>",
+  "source": "<news source>",
+  "type": "news",
+  "summary": "<2-3 sentences explaining the key news in simple terms>",
+  "why_relevant": "<1-2 sentences on why this matters to the user's work>",
+  "key_takeaway": "<The ONE most important thing to remember>",
+  "action_item": "<Specific action if any, or 'Stay informed'>",
+  "relevance_score": <original relevance score>,
+  "url": "<article url>"
+}
+
+Guidelines:
+- Use simple, conversational language
+- Focus on practical implications
+- Highlight industry impact
+- Make it scannable and actionable"""
+
+        # Use full content if available, otherwise fallback
+        content = full_content[:3000] if full_content else article.get('content_preview', article.get('description', ''))[:1000]
+        
+        user_prompt = f"""User Profile:
+Name: {user_info.get('name', 'User')}
+Role: {user_info.get('title', 'Researcher')}
+Goals: {user_info.get('goals', 'AI Research')}
+
+Article Details:
+Title: {article.get('title')}
+Source: {article.get('source', {}).get('name', 'Unknown')}
+Published: {article.get('publishedAt', 'Unknown')}
+Relevance Score: {article.get('relevance_score', 0)}
+Relevance Reason: {article.get('score_reason', '')}
+
+Content:
+{content}"""
+
+        # Add delay
+        await asyncio.sleep(settings.summary_delay)
+        
+        try:
+            response = await self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=1000)
+            summary_data = json.loads(response)
+            
+            # Ensure required fields
+            summary_data['type'] = 'news'
+            summary_data['relevance_score'] = article.get('relevance_score', 0)
+            summary_data['url'] = article.get('url', '')
+            summary_data['source'] = article.get('source', {}).get('name', 'Unknown')
+            
+            return summary_data
+        except Exception as e:
+            logfire.error(f"Failed to summarize news article: {str(e)}")
+            # Return basic info on failure
+            return {
+                'title': article.get('title', 'Unknown'),
+                'source': article.get('source', {}).get('name', 'Unknown'),
+                'type': 'news',
+                'summary': 'Summary generation failed',
+                'why_relevant': article.get('score_reason', ''),
+                'key_takeaway': 'Please review the article directly',
+                'action_item': 'Read full article',
+                'relevance_score': article.get('relevance_score', 0),
+                'url': article.get('url', '')
+            }
+
+    async def create_final_digest(
+        self,
+        summaries: List[Dict[str, Any]],
+        user_info: Dict[str, Any]
+    ) -> str:
+        """Create final HTML digest from individual summaries."""
+        system_prompt = """You are creating a personalized research digest for a busy professional.
+Transform the individual summaries into a cohesive, well-formatted HTML digest.
+
+Requirements:
+1. Create a clean, professional HTML document
+2. Group papers and news into separate sections
+3. Use the summaries to create a flowing narrative
+4. Maintain all links and attribution
+5. Add a brief personalized introduction
+6. Sort by relevance score within each section
+
+Return ONLY the HTML content, starting with <html> and ending with </html>.
+Use this structure:
+- Professional CSS styling in <head>
+- Personalized greeting and overview
+- Research Papers section (if any)
+- Industry News section (if any)
+- Brief conclusion with next steps
+
+Make it scannable with:
+- Clear headings
+- Bullet points for key takeaways
+- Visual hierarchy
+- Relevance indicators
+- Clean typography"""
+
+        # Separate papers and news
+        papers = [s for s in summaries if s.get('type') == 'paper']
+        news = [s for s in summaries if s.get('type') == 'news']
+        
+        # Sort by relevance
+        papers.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+        news.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+        
+        user_prompt = f"""User Profile:
+Name: {user_info.get('name', 'User')}
+Role: {user_info.get('title', 'Researcher')}
+Goals: {user_info.get('goals', 'AI Research')}
+
+Research Papers ({len(papers)} items):
+{json.dumps(papers, indent=2)}
+
+Industry News ({len(news)} items):
+{json.dumps(news, indent=2)}
+
+Create a cohesive HTML digest that tells a story about what's important for this user today."""
+
+        try:
+            response = await self._call_llm(
+                system_prompt, 
+                user_prompt, 
+                temperature=0.7, 
+                max_tokens=6000
+            )
+            
+            # Ensure valid HTML
+            if not response.strip().startswith('<html'):
+                response = f"<html>\n{response}\n</html>"
+                
+            return response
+        except Exception as e:
+            logfire.error(f"Failed to create final digest: {str(e)}")
+            # Return basic HTML on failure
+            return self._create_fallback_html(summaries, user_info)
+
+    def _create_fallback_html(self, summaries: List[Dict[str, Any]], user_info: Dict[str, Any]) -> str:
+        """Create a basic HTML digest as fallback."""
+        papers = [s for s in summaries if s.get('type') == 'paper']
+        news = [s for s in summaries if s.get('type') == 'news']
+        
+        html = f"""<html>
+<head>
+    <title>Research Digest for {user_info.get('name', 'User')}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
+        h1, h2 {{ color: #2c3e50; }}
+        .item {{ margin-bottom: 30px; padding: 20px; background: #f8f9fa; border-radius: 8px; }}
+        .relevance {{ color: #27ae60; font-weight: bold; }}
+        a {{ color: #3498db; text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+    </style>
+</head>
+<body>
+    <h1>Research Digest for {user_info.get('name', 'User')}</h1>
+    <p>Generated on {datetime.now().strftime('%B %d, %Y')}</p>
+"""
+        
+        if papers:
+            html += "\n<h2>Research Papers</h2>\n"
+            for paper in papers:
+                html += f"""
+    <div class="item">
+        <h3><a href="{paper.get('abstract_url', '#')}">{paper.get('title', 'Unknown')}</a></h3>
+        <p class="relevance">Relevance: {paper.get('relevance_score', 0)}%</p>
+        <p><strong>Summary:</strong> {paper.get('summary', 'No summary available')}</p>
+        <p><strong>Why it matters:</strong> {paper.get('why_relevant', 'Unknown')}</p>
+        <p><strong>Key takeaway:</strong> {paper.get('key_takeaway', 'Review the paper')}</p>
+    </div>
+"""
+        
+        if news:
+            html += "\n<h2>Industry News</h2>\n"
+            for article in news:
+                html += f"""
+    <div class="item">
+        <h3><a href="{article.get('url', '#')}">{article.get('title', 'Unknown')}</a></h3>
+        <p><em>Source: {article.get('source', 'Unknown')}</em></p>
+        <p class="relevance">Relevance: {article.get('relevance_score', 0)}%</p>
+        <p><strong>Summary:</strong> {article.get('summary', 'No summary available')}</p>
+        <p><strong>Action:</strong> {article.get('action_item', 'Stay informed')}</p>
+    </div>
+"""
+        
+        html += "\n</body>\n</html>"
+        return html
 
     def _determine_action(self, analysis_data: Dict[str, Any]) -> str:
         """Determine recommended action based on analysis."""

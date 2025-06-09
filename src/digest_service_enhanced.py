@@ -19,6 +19,7 @@ from .news_fetcher import NewsAPIFetcher
 from .content_extractor import TavilyExtractor
 from .query_generator import QueryGenerator
 from .circuit_breaker import ServiceCircuitBreakers, CircuitOpenError
+from .fetch_service import DailySourcesManager
 
 
 
@@ -31,6 +32,7 @@ class EnhancedDigestService:
         self.llm_client = LLMClient()
         self.fetcher = ArxivFetcher()
         self.state_manager = TaskStateManager()
+        self.daily_sources_manager = None  # Will be injected from main.py
         
         # Always initialize circuit breakers with reasonable defaults
         # This will be injected from main.py if available, otherwise use in-memory fallback
@@ -185,74 +187,158 @@ class EnhancedDigestService:
             logfire.error(f"Error simplifying content: {e}")
             return text[:max_length] if len(text) > max_length else text
 
-    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None, digest_sources: Optional[Dict[str, bool]] = None, top_n_news: int = None) -> None:
-        """Generate a complete digest for the user with circuit breaker protection."""
+    async def _load_daily_sources(self, source_date: str = None) -> Optional[Dict[str, Any]]:
+        """Load daily sources from the database."""
+        if not self.daily_sources_manager:
+            logfire.error("Daily sources manager not initialized")
+            return None
+        
+        try:
+            if source_date:
+                # Load sources for specific date
+                sources = await self.daily_sources_manager.get_sources_for_date(source_date)
+                if sources:
+                    logfire.info("Loaded sources for specific date", extra={"source_date": source_date})
+                    return sources
+                else:
+                    logfire.warn("No sources found for specified date", extra={"source_date": source_date})
+                    return None
+            else:
+                # Load latest available sources
+                sources = await self.daily_sources_manager.get_latest_sources()
+                if sources:
+                    logfire.info("Loaded latest available sources", extra={"source_date": sources.get('source_date')})
+                    return sources
+                else:
+                    logfire.warn("No sources available")
+                    return None
+                    
+        except Exception as e:
+            logfire.error("Failed to load daily sources", extra={"error": str(e), "source_date": source_date})
+            return None
+
+    async def generate_digest(self, task_id: str, user_info: Dict[str, Any], callback_url: str = None, target_date: str = None, top_n_articles: int = None, digest_sources: Optional[Dict[str, bool]] = None, top_n_news: int = None, source_date: str = None) -> None:
+        """Generate a complete digest for the user using pre-fetched sources."""
         try:
             # Set default digest sources if not provided
             if digest_sources is None:
                 digest_sources = {"arxiv": True, "news_api": settings.news_enabled}
             
-            await self.state_manager.update_task(
+            # Determine which source date to use (source_date parameter takes precedence over target_date)
+            effective_source_date = source_date or target_date
+            
+            await self.state_manager.update_task_with_source_date(
                 task_id,
-                DigestStatus(status=TaskStatus.PROCESSING, message="Fetching content...")
+                DigestStatus(status=TaskStatus.PROCESSING, message="Loading pre-fetched sources..."),
+                source_date=effective_source_date
             )
 
-            # Fetch papers if enabled
+            # Load pre-fetched sources
+            daily_sources = await self._load_daily_sources(effective_source_date)
+            if not daily_sources:
+                error_msg = f"No pre-fetched sources available for date: {effective_source_date or 'latest'}"
+                await self._complete_task(task_id, error_msg, callback_url)
+                return
+            
+            # Extract sources based on digest preferences
             articles = []
-            if digest_sources.get("arxiv", True):
-                await self.state_manager.update_task(
-                    task_id,
-                    DigestStatus(status=TaskStatus.PROCESSING, message="Fetching papers...")
-                )
-                articles = await self._fetch_papers_with_breaker(user_info.get('categories', ['cs.AI', 'cs.LG']), target_date)
-                logfire.info("Fetched ArXiv articles", extra={"count": len(articles)})
-
-            # Fetch news if enabled
             news_articles = []
-            if digest_sources.get("news_api", False) and self.news_fetcher and self.content_extractor and self.query_generator:
-                await self.state_manager.update_task(
-                    task_id,
-                    DigestStatus(status=TaskStatus.PROCESSING, message="Fetching relevant news...")
-                )
-                news_articles = await self._fetch_news_with_breaker(user_info, target_date, top_n_news)
-                logfire.info("Fetched news articles", extra={"count": len(news_articles)})
+            used_source_date = daily_sources.get('source_date')
+            
+            if digest_sources.get("arxiv", True):
+                articles = daily_sources.get('arxiv_papers', [])
+                logfire.info("Loaded ArXiv articles from pre-fetched sources", extra={"count": len(articles), "source_date": used_source_date})
 
-            # Combine articles and news
+            if digest_sources.get("news_api", False):
+                news_articles = daily_sources.get('news_articles', [])
+                logfire.info("Loaded news articles from pre-fetched sources", extra={"count": len(news_articles), "source_date": used_source_date})
+
+            # Check if we have any content to process
             all_content = articles + news_articles
-
             if not all_content:
                 sources_requested = [k for k, v in digest_sources.items() if v]
-                await self._complete_task(task_id, f"No content found for requested sources: {', '.join(sources_requested)}", callback_url)
+                await self._complete_task(task_id, f"No content found in pre-fetched sources for: {', '.join(sources_requested)}", callback_url)
                 return
+
+            # Separate ranking for papers and news
+            ranked_papers = []
+            ranked_news = []
 
             await self.state_manager.update_task(
                 task_id,
-                DigestStatus(status=TaskStatus.PROCESSING, message=f"Ranking {len(all_content)} items...")
+                DigestStatus(status=TaskStatus.PROCESSING, message=f"Ranking content separately...")
             )
 
-            # Rank content with circuit breaker
-            top_n = top_n_articles if top_n_articles is not None else settings.top_n_articles
-            ranked_articles = await self._rank_content_with_breaker(all_content, user_info, top_n)
+            # Rank papers separately if available
+            if articles:
+                top_n_papers = top_n_articles if top_n_articles is not None else settings.top_n_articles
+                await self.state_manager.update_task(
+                    task_id,
+                    DigestStatus(status=TaskStatus.PROCESSING, message=f"Ranking {len(articles)} papers...")
+                )
+                ranked_papers = await self._rank_papers_separately(articles, user_info, top_n_papers)
+                logfire.info(f"Ranked papers", extra={"input": len(articles), "output": len(ranked_papers)})
 
-            if not ranked_articles:
-                await self._complete_task(task_id, "No relevant content found", callback_url)
+            # Rank news separately if available
+            if news_articles:
+                top_n_news_final = top_n_news if top_n_news is not None else settings.top_n_news
+                await self.state_manager.update_task(
+                    task_id,
+                    DigestStatus(status=TaskStatus.PROCESSING, message=f"Ranking {len(news_articles)} news articles...")
+                )
+                ranked_news = await self._rank_news_separately(news_articles, user_info, top_n_news_final)
+                logfire.info(f"Ranked news", extra={"input": len(news_articles), "output": len(ranked_news)})
+
+            # Check if we have any ranked content
+            all_ranked = ranked_papers + ranked_news
+            if not all_ranked:
+                await self._complete_task(task_id, "No relevant content found after ranking", callback_url)
                 return
 
             await self.state_manager.update_task(
                 task_id,
                 DigestStatus(
                     status=TaskStatus.PROCESSING,
-                    message=f"Analyzing top {len(ranked_articles)} items..."
+                    message=f"Extracting content and generating summaries for {len(all_ranked)} items..."
                 )
             )
 
-            # Analyze articles with circuit breaker
-            analyzed_articles = await self._analyze_papers_with_breaker(ranked_articles, user_info)
+            # Process papers and news in parallel with content extraction and individual summaries
+            paper_summaries, news_summaries = await asyncio.gather(
+                self._process_papers_parallel(ranked_papers, user_info),
+                self._process_news_parallel(ranked_news, user_info),
+                return_exceptions=True
+            )
 
-            # Generate HTML digest
-            digest_html = self._generate_html(analyzed_articles, user_info)
+            # Handle exceptions
+            if isinstance(paper_summaries, Exception):
+                logfire.error(f"Paper processing failed: {str(paper_summaries)}")
+                paper_summaries = []
+            if isinstance(news_summaries, Exception):
+                logfire.error(f"News processing failed: {str(news_summaries)}")
+                news_summaries = []
 
-            await self._complete_task(task_id, digest_html, callback_url, analyzed_articles)
+            all_summaries = paper_summaries + news_summaries
+            if not all_summaries:
+                await self._complete_task(task_id, "Failed to generate summaries for content", callback_url)
+                return
+
+            await self.state_manager.update_task(
+                task_id,
+                DigestStatus(status=TaskStatus.PROCESSING, message="Creating final digest...")
+            )
+
+            # Generate final HTML digest from summaries
+            digest_html = await self._generate_final_digest(all_summaries, user_info)
+
+            # Determine digest type
+            digest_type = "mixed"
+            if articles and not news_articles:
+                digest_type = "papers_only"
+            elif news_articles and not articles:
+                digest_type = "news_only"
+
+            await self._complete_task(task_id, digest_html, callback_url, None, used_source_date, digest_type)
 
         except CircuitOpenError as e:
             error_msg = f"Service temporarily unavailable: {str(e)}"
@@ -272,139 +358,6 @@ class EnhancedDigestService:
             if callback_url:
                 await self._send_callback(callback_url, task_id, "failed", str(e))
 
-    async def _fetch_papers_with_breaker(self, categories: List[str], target_date: str = None) -> List[Dict[str, Any]]:
-        """Fetch papers with circuit breaker protection."""
-        breaker = self.circuit_breakers.get('arxiv')
-        
-        try:
-            return await breaker.call(self._fetch_papers, categories, target_date)
-        except CircuitOpenError:
-            logfire.warn("ArXiv circuit breaker open, returning empty list")
-            return []
-
-    async def _fetch_papers(self, categories: List[str], target_date: str = None) -> List[Dict[str, Any]]:
-        """Fetch papers from arXiv with caching."""
-        # Check cache first
-        cache_key = f"arxiv:{','.join(categories)}:{target_date or 'latest'}"
-        if self.cache:
-            cached = await self.cache.get(cache_key)
-            if cached:
-                logfire.info("ArXiv cache hit", extra={"cache_key": cache_key})
-                return cached
-        
-        from .fetcher_lightweight import fetch_arxiv_cs_submissions
-        
-        if not target_date:
-            target_date = "2025-05-01"
-        
-        try:
-            all_articles = await fetch_arxiv_cs_submissions(target_date)
-            
-            if not all_articles:
-                logfire.warn("No articles found for date {target_date}", target_date=target_date)
-                return []
-            
-            # Normalize articles
-            for article in all_articles:
-                if 'primary_subject' in article and 'subject' not in article:
-                    article['subject'] = article['primary_subject']
-                
-                article.setdefault('subject', 'cs.AI')
-                article.setdefault('authors', ['Unknown'])
-            
-            # Cache the result
-            if self.cache:
-                await self.cache.set(cache_key, all_articles, use_persistent=True)
-            
-            logfire.info("Fetched {count} articles from arXiv", count=len(all_articles))
-            return all_articles
-            
-        except Exception as e:
-            logfire.error("Failed to fetch papers: {error}", error=str(e))
-            raise
-
-    async def _fetch_news_with_breaker(self, user_info: Dict[str, Any], target_date: Optional[str] = None, top_n_news: int = None) -> List[Dict[str, Any]]:
-        """Fetch news with circuit breaker protection."""
-        if not settings.news_enabled:
-            return []
-        
-        try:
-            # Generate queries with circuit breaker
-            queries = await self._generate_queries_with_breaker(user_info, target_date)
-            if not queries:
-                return []
-            
-            # Fetch news with circuit breaker
-            newsapi_breaker = self.circuit_breakers.get('newsapi')
-            raw_news = await newsapi_breaker.call(
-                self.news_fetcher.fetch_news,
-                queries=queries,
-                target_date=target_date,
-                max_articles=settings.news_max_articles
-            )
-            
-            if not raw_news:
-                return []
-            
-            # Rank news articles
-            top_news = await self._rank_news_articles(raw_news, user_info, top_n_news)
-            
-            if not top_news:
-                return []
-            
-            # Extract content with circuit breaker
-            tavily_breaker = self.circuit_breakers.get('tavily')
-            extracted_news = await tavily_breaker.call(
-                self.content_extractor.extract_articles,
-                top_news,
-                priority_indices=None
-            )
-            
-            return extracted_news
-            
-        except CircuitOpenError as e:
-            logfire.warn("News service circuit breaker open: {error}", error=str(e))
-            return []
-        except Exception as e:
-            logfire.error("Failed to fetch news: {error}", error=str(e))
-            return []
-
-    async def _generate_queries_with_breaker(self, user_info: Dict[str, Any], target_date: Optional[str]) -> List[str]:
-        """Generate queries with circuit breaker protection."""
-        breaker = self.circuit_breakers.get('openai')
-        
-        try:
-            return await breaker.call(
-                self.query_generator.generate_queries,
-                user_info,
-                target_date
-            )
-        except CircuitOpenError:
-            # Fallback to simple queries
-            logfire.warn("Query generation circuit breaker open, using fallback queries")
-            return self._get_fallback_queries(user_info)
-
-    def _get_fallback_queries(self, user_info: Dict[str, Any]) -> List[str]:
-        """Generate simple fallback queries without LLM."""
-        queries = []
-        
-        # Add news interest if specified
-        news_interest = user_info.get('news_interest')
-        if news_interest:
-            queries.append(news_interest)
-        
-        # Add goals-based queries
-        goals = user_info.get('goals', '')
-        if 'AI' in goals.upper():
-            queries.append('artificial intelligence news')
-        if 'machine learning' in goals.lower():
-            queries.append('machine learning breakthrough')
-        
-        # Default queries
-        if not queries:
-            queries = ['AI technology news', 'tech industry updates']
-        
-        return queries[:5]
 
     async def _rank_content_with_breaker(
         self,
@@ -1166,22 +1119,245 @@ News Articles to rank:
         # This would need to be passed through or stored in instance
         return "AI Research"
 
+    async def _rank_papers_separately(
+        self,
+        papers: List[Dict[str, Any]],
+        user_info: Dict[str, Any],
+        top_n: int
+    ) -> List[RankedArticle]:
+        """Rank research papers separately using circuit breaker protection."""
+        if not papers:
+            return []
+        
+        breaker = self.circuit_breakers.get('openai')
+        
+        try:
+            return await breaker.call(
+                self.llm_client.rank_papers_only,
+                papers,
+                user_info,
+                top_n
+            )
+        except CircuitOpenError:
+            logfire.error("Papers ranking circuit breaker open, using fallback")
+            return self._create_fallback_ranked(papers[:top_n], "paper")
+
+    async def _rank_news_separately(
+        self,
+        news_articles: List[Dict[str, Any]],
+        user_info: Dict[str, Any],
+        top_n: int
+    ) -> List[RankedArticle]:
+        """Rank news articles separately using circuit breaker protection."""
+        if not news_articles:
+            return []
+        
+        breaker = self.circuit_breakers.get('openai')
+        
+        try:
+            return await breaker.call(
+                self.llm_client.rank_news_only,
+                news_articles,
+                user_info,
+                top_n
+            )
+        except CircuitOpenError:
+            logfire.error("News ranking circuit breaker open, using fallback")
+            return self._create_fallback_ranked(news_articles[:top_n], "news")
+
+    def _create_fallback_ranked(self, items: List[Dict[str, Any]], content_type: str) -> List[RankedArticle]:
+        """Create fallback ranked articles when circuit breaker is open."""
+        fallback_ranked = []
+        for i, item in enumerate(items):
+            try:
+                article = RankedArticle(
+                    title=item.get('title', 'Unknown'),
+                    authors=item.get('authors', ['Unknown']),
+                    subject=item.get('subject', 'news' if content_type == 'news' else 'cs.AI'),
+                    score_reason="Circuit breaker active - default ranking",
+                    relevance_score=100 - (i * 10),  # Decreasing scores
+                    abstract_url=item.get('abstract_url', item.get('url', 'https://example.com')),
+                    html_url=item.get('html_url'),
+                    pdf_url=item.get('pdf_url'),
+                    type=content_type
+                )
+                fallback_ranked.append(article)
+            except Exception as e:
+                logfire.error(f"Failed to create fallback ranked article: {str(e)}")
+        
+        return fallback_ranked
+
+    async def _process_papers_parallel(
+        self,
+        papers: List[RankedArticle],
+        user_info: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Process papers in parallel to generate individual summaries."""
+        if not papers:
+            return []
+        
+        semaphore = asyncio.Semaphore(settings.summary_max_concurrent)
+        
+        async def process_single_paper(paper: RankedArticle) -> Dict[str, Any]:
+            async with semaphore:
+                try:
+                    # Convert RankedArticle to dict for summarization
+                    paper_dict = {
+                        'title': paper.title,
+                        'authors': paper.authors,
+                        'abstract': paper.subject,  # Use subject as abstract for now
+                        'content_preview': paper.score_reason,
+                        'relevance_score': paper.relevance_score,
+                        'score_reason': paper.score_reason,
+                        'abstract_url': paper.abstract_url,
+                        'pdf_url': paper.pdf_url
+                    }
+                    
+                    # Get individual summary using circuit breaker
+                    breaker = self.circuit_breakers.get('openai')
+                    summary = await breaker.call(
+                        self.llm_client.summarize_single_paper,
+                        paper_dict,
+                        user_info
+                    )
+                    return summary
+                except Exception as e:
+                    logfire.error(f"Failed to process paper {paper.title}: {str(e)}")
+                    return {
+                        'title': paper.title,
+                        'authors': paper.authors,
+                        'type': 'paper',
+                        'summary': 'Processing failed',
+                        'why_relevant': paper.score_reason,
+                        'key_takeaway': 'Please review manually',
+                        'relevance_score': paper.relevance_score,
+                        'abstract_url': paper.abstract_url
+                    }
+        
+        # Process all papers in parallel
+        tasks = [process_single_paper(paper) for paper in papers]
+        summaries = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Filter out exceptions
+        valid_summaries = [s for s in summaries if not isinstance(s, Exception)]
+        logfire.info(f"Processed {len(valid_summaries)} paper summaries")
+        
+        return valid_summaries
+
+    async def _process_news_parallel(
+        self,
+        news_articles: List[RankedArticle], 
+        user_info: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Process news articles in parallel with Tavily extraction and summaries."""
+        if not news_articles:
+            return []
+        
+        semaphore = asyncio.Semaphore(settings.summary_max_concurrent)
+        
+        async def process_single_news(article: RankedArticle) -> Dict[str, Any]:
+            async with semaphore:
+                try:
+                    # Try Tavily extraction if available
+                    full_content = ""
+                    if self.content_extractor:
+                        try:
+                            extracted = await self.content_extractor.extract_single(str(article.abstract_url))
+                            if extracted:
+                                full_content = extracted.get('content', '')
+                                logfire.info(f"Successfully extracted content for {article.title}")
+                        except Exception as e:
+                            logfire.warn(f"Tavily extraction failed for {article.title}: {str(e)}")
+                    
+                    # Fallback to preview content if extraction failed
+                    if not full_content:
+                        full_content = article.score_reason  # Use score reason as preview
+                        logfire.info(f"Using preview content for {article.title}")
+                    
+                    # Convert RankedArticle to dict for summarization
+                    article_dict = {
+                        'title': article.title,
+                        'url': str(article.abstract_url),
+                        'source': {'name': getattr(article, 'source', 'Unknown')},
+                        'publishedAt': getattr(article, 'published_at', ''),
+                        'content_preview': article.score_reason,
+                        'relevance_score': article.relevance_score,
+                        'score_reason': article.score_reason
+                    }
+                    
+                    # Get individual summary using circuit breaker  
+                    breaker = self.circuit_breakers.get('openai')
+                    summary = await breaker.call(
+                        self.llm_client.summarize_single_news,
+                        article_dict,
+                        full_content,
+                        user_info
+                    )
+                    return summary
+                except Exception as e:
+                    logfire.error(f"Failed to process news article {article.title}: {str(e)}")
+                    return {
+                        'title': article.title,
+                        'source': getattr(article, 'source', 'Unknown'),
+                        'type': 'news',
+                        'summary': 'Processing failed',
+                        'why_relevant': article.score_reason,
+                        'key_takeaway': 'Please review manually',
+                        'action_item': 'Read full article',
+                        'relevance_score': article.relevance_score,
+                        'url': str(article.abstract_url)
+                    }
+        
+        # Process all news articles in parallel
+        tasks = [process_single_news(article) for article in news_articles]
+        summaries = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Filter out exceptions
+        valid_summaries = [s for s in summaries if not isinstance(s, Exception)]
+        logfire.info(f"Processed {len(valid_summaries)} news summaries")
+        
+        return valid_summaries
+
+    async def _generate_final_digest(
+        self,
+        summaries: List[Dict[str, Any]],
+        user_info: Dict[str, Any]
+    ) -> str:
+        """Generate final HTML digest from individual summaries."""
+        try:
+            breaker = self.circuit_breakers.get('openai')
+            return await breaker.call(
+                self.llm_client.create_final_digest,
+                summaries,
+                user_info
+            )
+        except CircuitOpenError:
+            logfire.error("Final digest generation circuit breaker open, using fallback")
+            return self.llm_client._create_fallback_html(summaries, user_info)
+        except Exception as e:
+            logfire.error(f"Failed to generate final digest: {str(e)}")
+            return self.llm_client._create_fallback_html(summaries, user_info)
+
     async def _complete_task(
         self,
         task_id: str,
         result: str,
         callback_url: str = None,
-        articles: List[ArticleAnalysis] = None
+        articles: List[ArticleAnalysis] = None,
+        source_date: str = None,
+        digest_type: str = None
     ) -> None:
         """Mark task as completed and send callback if needed."""
-        await self.state_manager.update_task(
+        await self.state_manager.update_task_with_source_date(
             task_id,
             DigestStatus(
                 status=TaskStatus.COMPLETED,
                 message="Digest generated successfully",
                 result=result,
                 articles=articles
-            )
+            ),
+            source_date=source_date,
+            digest_type=digest_type
         )
 
         if callback_url:

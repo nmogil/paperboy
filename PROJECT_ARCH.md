@@ -103,10 +103,11 @@ graph TB
 ### 1. **API Layer** (`src/main.py`)
 
 - FastAPI application with async request handling
-- RESTful endpoints for digest generation and status checking
+- RESTful endpoints for digest generation, source fetching, and status checking
 - Background task execution for long-running operations
 - API key authentication via middleware
 - Health check endpoints for monitoring
+- Two-phase operation support (fetch sources → generate digest)
 
 ### 2. **Digest Service** (`src/digest_service_enhanced.py`)
 
@@ -136,9 +137,10 @@ graph TB
 
 #### LLM Client (`src/llm_client.py`)
 
-- Direct OpenAI API integration
-- Handles paper and news ranking with structured outputs
-- Performs deep content analysis
+- Direct OpenAI API integration (replaced pydantic-ai)
+- Separate ranking for papers and news with structured outputs
+- Individual summary generation for papers and news
+- Final digest creation from summaries
 - Retry logic with exponential backoff
 - Mixed content ranking with type awareness
 
@@ -157,6 +159,14 @@ graph TB
 - Priority-based extraction with quota management
 - Batch processing with rate limiting
 - Fallback content strategies
+
+#### Fetch Service (`src/fetch_service.py`)
+
+- Daily source pre-fetching for batch processing
+- Stores fetched content in Supabase `daily_sources` table
+- Generic news queries for broad coverage
+- Background task support with callbacks
+- SSL retry logic for Supabase operations
 
 ### 6. **Infrastructure Components**
 
@@ -214,34 +224,31 @@ graph TB
 
 ## Data Flow
 
-1. **Request Initiation**
+### Option 1: Direct Digest Generation
 
+1. **Request Initiation**
    - Client sends user profile and preferences to `/generate-digest`
    - System creates task ID and returns immediately
    - Background task begins processing
 
 2. **Content Discovery**
-
    - ArXiv fetcher scrapes latest CS papers
    - Query generator creates personalized news searches
    - News fetcher retrieves relevant articles
    - Both sources fetched in parallel
 
 3. **Intelligent Ranking**
-
-   - LLM analyzes all content against user profile
-   - Mixed ranking considers both papers and news
-   - Top N items selected based on relevance scores
+   - Papers and news ranked separately by LLM
+   - Top N items selected from each category
+   - Preserves balance between content types
 
 4. **Deep Analysis**
-
-   - Content extractor fetches full text for top items
-   - LLM performs detailed analysis of each item
-   - Generates summaries, key findings, and recommendations
+   - Content extractor fetches full text for news
+   - Papers and news processed in parallel
+   - Individual summaries generated for each item
 
 5. **Digest Generation**
-
-   - HTML generator creates formatted output
+   - Final digest created from all summaries
    - Separate sections for papers and news
    - Rich metadata and visual styling
    - Mobile-responsive design
@@ -250,6 +257,20 @@ graph TB
    - Task status updated to completed
    - Client polls `/digest-status/{task_id}` for results
    - Optional webhook callback notification
+
+### Option 2: Two-Phase Operation (Recommended for batch processing)
+
+1. **Daily Source Fetching**
+   - Admin/scheduler calls `/fetch-sources` with date
+   - System fetches all ArXiv papers for that date
+   - Generic news queries fetch broad tech news
+   - Sources stored in Supabase `daily_sources` table
+
+2. **Digest Generation with Pre-fetched Sources**
+   - Client sends request with `source_date` parameter
+   - System loads pre-fetched sources from Supabase
+   - Ranking and analysis proceed with cached content
+   - Significantly faster digest generation
 
 ## Key Design Patterns
 
@@ -272,8 +293,9 @@ The system uses environment-based configuration with sensible defaults:
 
 - `OPENAI_API_KEY`: OpenAI API access (required)
 - `API_KEY`: Authentication for API endpoints (required)
-- `OPENAI_MODEL`: Model selection (default: gpt-4o-mini-2024-07-18)
-- `TOP_N_ARTICLES`: Number of articles to analyze (default: 5)
+- `OPENAI_MODEL`: Model selection (default: gpt-4.1-mini-2025-04-14)
+- `TOP_N_ARTICLES`: Number of papers to analyze (default: 5)
+- `TOP_N_NEWS`: Number of news articles to analyze (default: 5)
 - `LOG_LEVEL`: Logging verbosity (default: INFO)
 
 ### Performance Settings
@@ -334,6 +356,32 @@ CREATE TABLE digest_tasks (
     user_info JSONB,
     result JSONB,
     error TEXT,
+    source_date TEXT,
+    digest_type TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Daily source storage
+CREATE TABLE daily_sources (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_date TEXT UNIQUE NOT NULL,
+    arxiv_papers JSONB,
+    news_articles JSONB,
+    fetch_status TEXT,
+    fetch_metadata JSONB,
+    error TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Fetch task tracking
+CREATE TABLE fetch_tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL,
+    result JSONB,
+    error TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -367,3 +415,4 @@ CREATE TABLE circuit_breaker_state (
 - User-friendly error messages in API responses
 - Request tracking ensures clean shutdown
 - Retry logic with exponential backoff for transient failures
+- SSL retry logic for Supabase operations
