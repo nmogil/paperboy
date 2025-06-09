@@ -175,23 +175,18 @@ class FetchSourcesService:
             return []
         
         try:
-            # Use generic tech queries instead of user-specific ones
-            generic_queries = [
-                "artificial intelligence breakthrough",
-                "machine learning news", 
-                "AI technology latest",
-                "tech industry updates",
-                "software engineering AI",
-                "data science advances",
-                "robotics innovation",
-                "natural language processing"
-            ]
+            # Use QueryGenerator to get queries (will always return ["AI"])
+            dummy_user_info = {"name": "fetch_service", "title": "system", "goals": ""}
+            queries = await self.query_generator.generate_queries(
+                dummy_user_info, 
+                target_date=source_date
+            )
             
             # Fetch news with circuit breaker
             newsapi_breaker = self.circuit_breakers.get('newsapi')
             news_articles = await newsapi_breaker.call(
                 self.news_fetcher.fetch_news,
-                queries=generic_queries,
+                queries=queries,
                 target_date=source_date,
                 max_articles=settings.news_max_articles
             )
