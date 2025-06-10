@@ -294,6 +294,11 @@ Articles:
         top_n: int
     ) -> List[RankedArticle]:
         """Rank research papers separately based on user profile."""
+        # Normalize author field to authors list before processing (safety check)
+        for paper in papers:
+            if 'author' in paper and 'authors' not in paper:
+                paper['authors'] = [paper['author']] if paper['author'] else []
+        
         primary_goals = user_info.get('goals', 'AI Research')
         user_title = user_info.get('title', 'Researcher')
         
@@ -347,6 +352,11 @@ Papers:
         top_n: int
     ) -> List[RankedArticle]:
         """Rank news articles separately based on user profile."""
+        # Normalize author field to authors list before processing
+        for article in news_articles:
+            if 'author' in article and 'authors' not in article:
+                article['authors'] = [article['author']] if article['author'] else []
+        
         primary_goals = user_info.get('goals', 'AI Research')
         news_interest = user_info.get('news_interest', '')
         user_title = user_info.get('title', 'Researcher')
@@ -877,33 +887,227 @@ Content:
         user_info: Dict[str, Any]
     ) -> str:
         """Create final HTML digest from individual summaries."""
-        system_prompt = """You are creating a personalized research digest for a busy professional.
-Transform the individual summaries into a cohesive, well-formatted HTML digest.
+        system_prompt = """You are creating a personalized research digest in the EXACT format of Paperboy Digest.
 
-Requirements:
-1. Create a clean, professional HTML document
-2. Group papers and news into separate sections
-3. Use the summaries to create a flowing narrative
-4. Maintain all links and attribution
-5. Add a brief personalized introduction
-6. Sort by relevance score within each section
+CRITICAL: You MUST follow this EXACT HTML template structure. Do not deviate from this format:
 
-CRITICAL: Return ONLY raw HTML content, starting with <html> and ending with </html>.
-Do NOT use markdown code blocks (```html). Return the raw HTML directly.
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Research Digest - [CURRENT_DATE_FORMATTED]</title>
+    <style>
+        body {
+            font-family: Georgia, Times, serif;
+            line-height: 1.6;
+            color: #000000;
+            background-color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            font-size: 28px;
+            font-weight: bold;
+            margin: 0 0 5px 0;
+            color: #000000;
+            text-align: center;
+            border-bottom: 3px solid #000000;
+            padding-bottom: 10px;
+        }
+        
+        h2 {
+            font-size: 18px;
+            font-weight: bold;
+            margin: 30px 0 15px 0;
+            color: #000000;
+            border-bottom: 1px solid #cccccc;
+            padding-bottom: 5px;
+        }
+        
+        h3 {
+            font-size: 16px;
+            font-weight: bold;
+            margin: 20px 0 10px 0;
+            color: #000000;
+        }
+        
+        p {
+            margin: 10px 0;
+            font-size: 14px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #000000;
+        }
+        
+        .date {
+            font-size: 12px;
+            color: #666666;
+            margin: 5px 0;
+        }
+        
+        .subtitle {
+            font-size: 14px;
+            color: #666666;
+            margin: 10px 0;
+        }
+        
+        .stats {
+            font-size: 12px;
+            color: #666666;
+            margin: 15px 0;
+        }
+        
+        .article {
+            margin: 25px 0;
+            padding: 15px 0;
+            border-bottom: 1px solid #eeeeee;
+        }
+        
+        .article-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin: 0 0 8px 0;
+            color: #000000;
+        }
+        
+        .article-meta {
+            font-size: 11px;
+            color: #666666;
+            margin: 5px 0;
+        }
+        
+        .summary {
+            font-size: 14px;
+            margin: 10px 0;
+            color: #333333;
+        }
+        
+        .relevance {
+            font-size: 13px;
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f9f9f9;
+            border-left: 3px solid #cccccc;
+        }
+        
+        .actions {
+            margin: 15px 0;
+        }
+        
+        .actions a {
+            color: #000000;
+            text-decoration: underline;
+            font-size: 13px;
+            margin-right: 15px;
+        }
+        
+        .section {
+            margin: 30px 0;
+        }
+        
+        .quick-item {
+            margin: 8px 0;
+            font-size: 13px;
+            padding: 5px 0;
+        }
+        
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #cccccc;
+            text-align: center;
+            font-size: 12px;
+            color: #666666;
+        }
+        
+        .score {
+            font-size: 11px;
+            color: #666666;
+            font-weight: normal;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📰 PAPERBOY DIGEST</h1>
+        <div class="date">[CURRENT_DATE - format as: Monday, June 09, 2025]</div>
+        <div class="subtitle">Personalized for [USER_NAME], [USER_TITLE]</div>
+        <div class="stats">[PAPER_COUNT] Papers • [NEWS_COUNT] News Articles • [READING_TIME] min read</div>
+    </div>
 
-Use this structure:
-- Professional CSS styling in <head>
-- Personalized greeting and overview
-- Research Papers section (if any)
-- Industry News section (if any)
-- Brief conclusion with next steps
+    <div class="section">
+        <h2>TODAY'S HIGHLIGHTS</h2>
+        [CREATE 3-5 BULLET POINTS WITH THE TOP INSIGHTS]
+        • <strong>[Article Title]:</strong> [One-line key insight]<br>
+        [CONTINUE FOR EACH HIGHLIGHT]
+    </div>
 
-Make it scannable with:
-- Clear headings
-- Bullet points for key takeaways
-- Visual hierarchy
-- Relevance indicators
-- Clean typography"""
+    <div class="section">
+        <h2>DIRECTLY RELEVANT TO YOUR WORK</h2>
+        [FOR EACH ARTICLE WITH RELEVANCE SCORE 80-100, CREATE:]
+        
+        <div class="article">
+            <div class="article-title">[ARTICLE TITLE]</div>
+            <div class="article-meta">[RESEARCH or NEWS] • [CRITICAL/IMPORTANT] • Score: [SCORE]/100</div>
+            
+            <div class="summary">[SUMMARY FROM THE INPUT]</div>
+            
+            <div class="relevance">
+                <strong>Why this matters:</strong> [WHY_RELEVANT FROM INPUT]
+            </div>
+            
+            <div class="summary">
+                <strong>Key insight:</strong> [KEY_TAKEAWAY FROM INPUT]
+            </div>
+            
+            <div class="actions">
+                <a href="[ABSTRACT_URL OR URL]">Read Article</a>
+                [IF PAPER AND HAS PDF_URL: <a href="[PDF_URL]">Download PDF</a>]
+            </div>
+        </div>
+    </div>
+
+    [IF THERE ARE ARTICLES WITH SCORES 60-79:]
+    <div class="section">
+        <h2>EXPAND YOUR KNOWLEDGE</h2>
+        [SAME ARTICLE FORMAT AS ABOVE]
+    </div>
+
+    [IF THERE ARE ARTICLES WITH SCORES < 60:]
+    <div class="section">
+        <h2>QUICK SCAN</h2>
+        [SHORTER FORMAT:]
+        <div class="quick-item">
+            • <strong>[TITLE]</strong> <span class="score">(Score: [SCORE])</span><br>
+            [ONE LINE SUMMARY] <a href="[URL]">Read more</a>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p><strong>Your Research Impact This Week</strong></p>
+        <p>[TOTAL_PAPERS_PROCESSED]+ papers processed • [ARTICLES_SELECTED] selected for you • ~[TIME_SAVED] minutes saved</p>
+        <p>Generated by <strong>Paperboy AI</strong> • Accelerating research through intelligent curation</p>
+    </div>
+</body>
+</html>
+
+INSTRUCTIONS:
+1. Use EXACTLY this HTML structure - do not add or remove any sections
+2. Replace all [PLACEHOLDERS] with actual data from the summaries
+3. Calculate stats: papers processed = total articles * 4, time saved = total articles * 15
+4. Format the current date as shown (e.g., "Monday, June 09, 2025")
+5. Categorize by score: 80-100 (DIRECTLY RELEVANT), 60-79 (EXPAND KNOWLEDGE), <60 (QUICK SCAN)
+6. Use "CRITICAL" for scores 90-100, "IMPORTANT" for scores 80-89, "NOTEWORTHY" for scores 60-79
+7. MUST include the 📰 emoji in the header
+8. Return ONLY the HTML - no markdown blocks, no explanations"""
 
         # Separate papers and news
         papers = [s for s in summaries if s.get('type') == 'paper']

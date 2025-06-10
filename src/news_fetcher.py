@@ -341,7 +341,7 @@ class NewsAPIFetcher:
                 'url': article.get('url') or '',
                 'published_at': article.get('publishedAt') or '',
                 'source': (article.get('source') or {}).get('name') or '',
-                'author': article.get('author') or '',
+                'authors': [article.get('author')] if article.get('author') else [],
                 'url_to_image': article.get('urlToImage') or '',
                 'type': 'news',
                 'subject': 'news',

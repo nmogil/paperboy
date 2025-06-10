@@ -251,6 +251,10 @@ class EnhancedDigestService:
 
             if digest_sources.get("news_api", False):
                 news_articles = daily_sources.get('news_articles', [])
+                # Normalize author field to authors list for backward compatibility
+                for article in news_articles:
+                    if 'author' in article and 'authors' not in article:
+                        article['authors'] = [article['author']] if article['author'] else []
                 logfire.info("Loaded news articles from pre-fetched sources", extra={"count": len(news_articles), "source_date": used_source_date})
 
             # Check if we have any content to process
@@ -1172,7 +1176,7 @@ News Articles to rank:
             try:
                 article = RankedArticle(
                     title=item.get('title', 'Unknown'),
-                    authors=item.get('authors', ['Unknown']),
+                    authors=item.get('authors') or ([item['author']] if item.get('author') else ['Unknown']),
                     subject=item.get('subject', 'news' if content_type == 'news' else 'cs.AI'),
                     score_reason="Circuit breaker active - default ranking",
                     relevance_score=100 - (i * 10),  # Decreasing scores

@@ -196,6 +196,9 @@ class FetchSourcesService:
                 article.setdefault('type', 'news')
                 article.setdefault('subject', 'news')
                 article.setdefault('relevance_score', 0.0)
+                # Normalize author field to authors list
+                if 'author' in article and 'authors' not in article:
+                    article['authors'] = [article['author']] if article['author'] else []
             
             logfire.info("Fetched news articles", extra={"count": len(news_articles), "source_date": source_date})
             return news_articles

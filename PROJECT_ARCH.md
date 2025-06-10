@@ -222,32 +222,233 @@ graph TB
 - FastAPI dependency injection
 - Header-based authentication
 
+## FastAPI Endpoint Flow Diagrams
+
+The system provides several RESTful endpoints for digest generation, source fetching, and monitoring. Below are detailed flow diagrams for each endpoint showing their internal processing logic, error handling, and integration with external services.
+
+### Endpoint Summary
+
+| Endpoint                           | Method | Authentication | Purpose                             | Key Features                                               |
+| ---------------------------------- | ------ | -------------- | ----------------------------------- | ---------------------------------------------------------- |
+| `/generate-digest`                 | POST   | Required       | Create personalized research digest | Background processing, circuit breakers, webhook callbacks |
+| `/digest-status/{task_id}`         | GET    | Required       | Check digest generation status      | Real-time status polling, result retrieval                 |
+| `/fetch-sources`                   | POST   | Required       | Pre-fetch daily sources             | Two-phase operation, async/sync modes                      |
+| `/fetch-status/{task_id}`          | GET    | Required       | Check source fetching status        | Task progress monitoring                                   |
+| `/preview-new-format/{task_id}`    | GET    | Required       | Preview HTML digest format          | On-demand HTML regeneration                                |
+| `/health`, `/digest-status/health` | GET    | None           | Basic health checks                 | Load balancer probes                                       |
+| `/metrics`                         | GET    | Required       | Application metrics                 | Circuit breaker status, recent tasks                       |
+| `/ready`                           | GET    | None           | Readiness probe                     | Dependency health validation                               |
+
+### POST /generate-digest
+
+Main endpoint for creating personalized research digests with AI-powered analysis.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[POST /generate-digest]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E{Service Shutting Down?}
+    E -->|Yes| F[503 Service Unavailable]
+    E -->|No| G[Generate Task ID]
+    G --> H[Extract User Info<br/>from Request]
+    H --> I[Determine Digest Type<br/>based on digest_sources]
+    I --> J[Create Task in Supabase<br/>with PENDING status]
+    J --> K[Add Background Task<br/>with Request Tracking]
+    K --> L[Return 200 with<br/>task_id and status]
+
+    K --> M[Background: safe_background_task]
+    M --> N[Fetch or Load Sources<br/>ArXiv & News]
+    N --> O[Circuit Breaker Check<br/>for External Services]
+    O --> P[Rank Papers & News<br/>using LLM]
+    P --> Q[Extract Content<br/>for Top Articles]
+    Q --> R[Generate Analysis<br/>for Each Article]
+    R --> S[Create HTML Digest]
+    S --> T[Update Task to<br/>COMPLETED in Supabase]
+    T --> U{Callback URL?}
+    U -->|Yes| V[Send Webhook<br/>Notification]
+    U -->|No| W[Task Complete]
+
+    M -->|Error| X[Update Task to<br/>FAILED in Supabase]
+    X --> Y[Log Error]
+```
+
+### GET /digest-status/{task_id}
+
+Status polling endpoint for checking digest generation progress and retrieving results.
+
+```mermaid
+graph TD
+    A[Client Request] --> B["GET /digest-status/{task_id}"]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E["Query Task from<br/>Supabase State Manager"]
+    E --> F{Task Found?}
+    F -->|No| G[404 Task Not Found]
+    F -->|Yes| H["Extract Task Status<br/>and Metadata"]
+    H --> I["Convert Articles to<br/>Dictionary Format"]
+    I --> J["Return DigestStatusResponse<br/>with status, result, articles"]
+```
+
+### POST /fetch-sources
+
+Two-phase operation endpoint for pre-fetching daily sources to optimize batch processing.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[POST /fetch-sources]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E{Service Shutting Down?}
+    E -->|Yes| F[503 Service Unavailable]
+    E -->|No| G[Generate Task ID]
+    G --> H["Create Fetch Task Record<br/>in Supabase"]
+    H --> I{Callback URL Provided?}
+
+    I -->|Yes| J["Add Background Task<br/>with Request Tracking"]
+    J --> K["Return 200 with<br/>task_id, processing status"]
+    J --> L["Background: safe_fetch_task"]
+    L --> M["Circuit Breaker Check"]
+    M --> N["Fetch ArXiv Papers<br/>for Source Date"]
+    N --> O["Generate Generic<br/>News Queries"]
+    O --> P["Fetch News Articles"]
+    P --> Q["Store Sources in<br/>Supabase daily_sources table"]
+    Q --> R["Update Task Status<br/>to COMPLETED"]
+    R --> S{Callback URL?}
+    S -->|Yes| T["Send Webhook<br/>Notification"]
+    S -->|No| U[Task Complete]
+
+    I -->|No| V["Process Synchronously"]
+    V --> W["Call fetch_service<br/>directly"]
+    W --> X["Return Result<br/>Immediately"]
+
+    L -->|Error| Y["Update Task to<br/>FAILED in Supabase"]
+    Y --> Z[Log Error]
+```
+
+### GET /fetch-status/{task_id}
+
+Status polling endpoint for source fetching tasks.
+
+```mermaid
+graph TD
+    A[Client Request] --> B["GET /fetch-status/{task_id}"]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E["Query Fetch Task from<br/>Supabase State Manager"]
+    E --> F{Task Found?}
+    F -->|No| G[404 Fetch Task Not Found]
+    F -->|Yes| H["Extract Task Data<br/>(status, source_date, result, error)"]
+    H --> I["Return FetchStatusResponse<br/>with all task details"]
+```
+
+### GET /preview-new-format/{task_id}
+
+HTML preview endpoint for regenerating and viewing digest formatting.
+
+```mermaid
+graph TD
+    A[Client Request] --> B["GET /preview-new-format/{task_id}"]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E["Query Task from<br/>Supabase State Manager"]
+    E --> F{Task Found and Completed?}
+    F -->|No| G[404 Task Not Found<br/>or Not Completed]
+    F -->|Yes| H["Extract User Info<br/>from Task or Use Defaults"]
+    H --> I{Articles Available?}
+    I -->|No| J[404 No Articles Found]
+    I -->|Yes| K["Re-generate HTML<br/>using _generate_html"]
+    K --> L[Return HTMLResponse<br/>with Formatted Content]
+
+    K -->|Error| M[500 Error Generating Preview]
+```
+
+### Monitoring and Health Check Endpoints
+
+#### GET /health & GET /digest-status/health
+
+Basic health check endpoints for load balancer and uptime monitoring.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[GET /health or /digest-status/health]
+    B --> C["Return JSON Response<br/>{status: 'healthy', version: '2.1.0'}"]
+```
+
+#### GET /metrics
+
+Comprehensive application metrics for monitoring and debugging.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[GET /metrics]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E["Collect Application Metrics<br/>(version, supabase, cache)"]
+    E --> F["Get Circuit Breaker Status<br/>from all services"]
+    F --> G["Try to Get Recent Tasks<br/>(if supported)"]
+    G --> H["Return Comprehensive<br/>Metrics JSON"]
+
+    G -->|Error| I[Log Error and<br/>Continue without Recent Tasks]
+    I --> H
+```
+
+#### GET /ready
+
+Cloud Run readiness probe with dependency health checks.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[GET /ready]
+    B --> C["Initialize Checks Dictionary"]
+    C --> D["Test Supabase Connectivity<br/>via digest_tasks table"]
+    D --> E{Supabase Healthy?}
+    E -->|Yes| F["Mark supabase: healthy"]
+    E -->|No| G["Mark supabase: unhealthy<br/>with error details"]
+
+    F --> H["Check Circuit Breakers<br/>Availability"]
+    G --> H
+    H --> I{Circuit Breakers Available?}
+    I -->|Yes| J["Mark circuit_breakers: healthy"]
+    I -->|No| K["Mark circuit_breakers: not_configured"]
+
+    J --> L{All Checks Passed?}
+    K --> L
+    L -->|Yes| M["Return 200 Ready<br/>with all check results"]
+    L -->|No| N["Return 503 Not Ready<br/>with failed check details"]
+```
+
 ## Data Flow
 
 ### Option 1: Direct Digest Generation
 
 1. **Request Initiation**
+
    - Client sends user profile and preferences to `/generate-digest`
    - System creates task ID and returns immediately
    - Background task begins processing
 
 2. **Content Discovery**
+
    - ArXiv fetcher scrapes latest CS papers
    - Query generator creates personalized news searches
    - News fetcher retrieves relevant articles
    - Both sources fetched in parallel
 
 3. **Intelligent Ranking**
+
    - Papers and news ranked separately by LLM
    - Top N items selected from each category
    - Preserves balance between content types
 
 4. **Deep Analysis**
+
    - Content extractor fetches full text for news
    - Papers and news processed in parallel
    - Individual summaries generated for each item
 
 5. **Digest Generation**
+
    - Final digest created from all summaries
    - Separate sections for papers and news
    - Rich metadata and visual styling
@@ -261,6 +462,7 @@ graph TB
 ### Option 2: Two-Phase Operation (Recommended for batch processing)
 
 1. **Daily Source Fetching**
+
    - Admin/scheduler calls `/fetch-sources` with date
    - System fetches all ArXiv papers for that date
    - Generic news queries fetch broad tech news

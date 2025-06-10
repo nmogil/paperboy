@@ -184,16 +184,16 @@ All configuration is managed via environment variables in `config/.env`. The sys
 
 ### Optional Features
 
-| Variable              | Description                       | Default |
-| --------------------- | --------------------------------- | ------- |
-| `NEWS_ENABLED`        | Enable news fetching              | `true`  |
-| `NEWSAPI_KEY`         | NewsAPI key for news              | -       |
-| `TAVILY_API_KEY`      | Tavily key for content extraction | -       |
-| `NEWS_MAX_ARTICLES`   | Max news articles to fetch        | `50`    |
-| `NEWS_MAX_EXTRACT`    | Max articles to extract content   | `10`    |
-| `NEWS_CACHE_TTL`      | News cache duration (seconds)     | `3600`  |
-| `USE_LIGHTWEIGHT`     | Use httpx instead of Playwright   | `true`  |
-| `LOGFIRE_TOKEN`       | Monitoring service token          | -       |
+| Variable            | Description                       | Default |
+| ------------------- | --------------------------------- | ------- |
+| `NEWS_ENABLED`      | Enable news fetching              | `true`  |
+| `NEWSAPI_KEY`       | NewsAPI key for news              | -       |
+| `TAVILY_API_KEY`    | Tavily key for content extraction | -       |
+| `NEWS_MAX_ARTICLES` | Max news articles to fetch        | `50`    |
+| `NEWS_MAX_EXTRACT`  | Max articles to extract content   | `10`    |
+| `NEWS_CACHE_TTL`    | News cache duration (seconds)     | `3600`  |
+| `USE_LIGHTWEIGHT`   | Use httpx instead of Playwright   | `true`  |
+| `LOGFIRE_TOKEN`     | Monitoring service token          | -       |
 
 ## API Usage
 
@@ -205,14 +205,219 @@ All API endpoints (except health check) require authentication via the `X-API-Ke
 curl -H "X-API-Key: your_api_key_from_env" http://localhost:8000/endpoint
 ```
 
+## FastAPI Endpoint Flow Diagrams
+
+### Endpoint Summary
+
+| Endpoint                        | Method | Authentication | Purpose                             | Response Type            |
+| ------------------------------- | ------ | -------------- | ----------------------------------- | ------------------------ |
+| `/generate-digest`              | POST   | Required       | Create personalized research digest | JSON (task_id)           |
+| `/digest-status/{task_id}`      | GET    | Required       | Check digest generation status      | JSON (status + results)  |
+| `/fetch-sources`                | POST   | Required       | Pre-fetch daily sources             | JSON (task_id)           |
+| `/fetch-status/{task_id}`       | GET    | Required       | Check source fetching status        | JSON (status + metadata) |
+| `/preview-new-format/{task_id}` | GET    | Required       | Preview HTML digest format          | HTML                     |
+| `/health`                       | GET    | None           | Basic health check                  | JSON                     |
+| `/digest-status/health`         | GET    | None           | Alternative health check            | JSON                     |
+| `/metrics`                      | GET    | Required       | Application metrics                 | JSON                     |
+| `/ready`                        | GET    | None           | Readiness probe for Cloud Run       | JSON                     |
+
+### POST /generate-digest
+
+Creates a personalized research digest with AI-powered ranking and analysis.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[POST /generate-digest]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E{Service Shutting Down?}
+    E -->|Yes| F[503 Service Unavailable]
+    E -->|No| G[Generate Task ID]
+    G --> H[Extract User Info<br/>from Request]
+    H --> I[Determine Digest Type<br/>based on digest_sources]
+    I --> J[Create Task in Supabase<br/>with PENDING status]
+    J --> K[Add Background Task<br/>with Request Tracking]
+    K --> L[Return 200 with<br/>task_id and status]
+
+    K --> M[Background: safe_background_task]
+    M --> N[Fetch or Load Sources<br/>ArXiv & News]
+    N --> O[Circuit Breaker Check<br/>for External Services]
+    O --> P[Rank Papers & News<br/>using LLM]
+    P --> Q[Extract Content<br/>for Top Articles]
+    Q --> R[Generate Analysis<br/>for Each Article]
+    R --> S[Create HTML Digest]
+    S --> T[Update Task to<br/>COMPLETED in Supabase]
+    T --> U{Callback URL?}
+    U -->|Yes| V[Send Webhook<br/>Notification]
+    U -->|No| W[Task Complete]
+
+    M -->|Error| X[Update Task to<br/>FAILED in Supabase]
+    X --> Y[Log Error]
+```
+
+### GET /digest-status/{task_id}
+
+Checks the status and retrieves results of a digest generation task.
+
+```mermaid
+graph TD
+    A[Client Request] --> B["GET /digest-status/{task_id}"]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E["Query Task from<br/>Supabase State Manager"]
+    E --> F{Task Found?}
+    F -->|No| G[404 Task Not Found]
+    F -->|Yes| H["Extract Task Status<br/>and Metadata"]
+    H --> I["Convert Articles to<br/>Dictionary Format"]
+    I --> J["Return DigestStatusResponse<br/>with status, result, articles"]
+```
+
+### POST /fetch-sources
+
+Pre-fetches and stores daily sources for faster digest generation.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[POST /fetch-sources]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E{Service Shutting Down?}
+    E -->|Yes| F[503 Service Unavailable]
+    E -->|No| G[Generate Task ID]
+    G --> H["Create Fetch Task Record<br/>in Supabase"]
+    H --> I{Callback URL Provided?}
+
+    I -->|Yes| J["Add Background Task<br/>with Request Tracking"]
+    J --> K["Return 200 with<br/>task_id, processing status"]
+    J --> L["Background: safe_fetch_task"]
+    L --> M["Circuit Breaker Check"]
+    M --> N["Fetch ArXiv Papers<br/>for Source Date"]
+    N --> O["Generate Generic<br/>News Queries"]
+    O --> P["Fetch News Articles"]
+    P --> Q["Store Sources in<br/>Supabase daily_sources table"]
+    Q --> R["Update Task Status<br/>to COMPLETED"]
+    R --> S{Callback URL?}
+    S -->|Yes| T["Send Webhook<br/>Notification"]
+    S -->|No| U[Task Complete]
+
+    I -->|No| V["Process Synchronously"]
+    V --> W["Call fetch_service<br/>directly"]
+    W --> X["Return Result<br/>Immediately"]
+
+    L -->|Error| Y["Update Task to<br/>FAILED in Supabase"]
+    Y --> Z[Log Error]
+```
+
+### GET /fetch-status/{task_id}
+
+Checks the status of a source fetching task.
+
+```mermaid
+graph TD
+    A[Client Request] --> B["GET /fetch-status/{task_id}"]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E["Query Fetch Task from<br/>Supabase State Manager"]
+    E --> F{Task Found?}
+    F -->|No| G[404 Fetch Task Not Found]
+    F -->|Yes| H["Extract Task Data<br/>(status, source_date, result, error)"]
+    H --> I["Return FetchStatusResponse<br/>with all task details"]
+```
+
+### GET /preview-new-format/{task_id}
+
+Regenerates and previews the HTML format for a completed digest task.
+
+```mermaid
+graph TD
+    A[Client Request] --> B["GET /preview-new-format/{task_id}"]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E["Query Task from<br/>Supabase State Manager"]
+    E --> F{Task Found and Completed?}
+    F -->|No| G[404 Task Not Found<br/>or Not Completed]
+    F -->|Yes| H["Extract User Info<br/>from Task or Use Defaults"]
+    H --> I{Articles Available?}
+    I -->|No| J[404 No Articles Found]
+    I -->|Yes| K["Re-generate HTML<br/>using _generate_html"]
+    K --> L[Return HTMLResponse<br/>with Formatted Content]
+
+    K -->|Error| M[500 Error Generating Preview]
+```
+
+### GET /health
+
+Simple health check endpoint that requires no authentication.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[GET /health]
+    B --> C["Return JSON Response<br/>{status: 'healthy', version: '2.1.0'}"]
+```
+
+### GET /metrics
+
+Returns comprehensive application metrics and circuit breaker status.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[GET /metrics]
+    B --> C{API Key Valid?}
+    C -->|No| D[401 Unauthorized]
+    C -->|Yes| E["Collect Application Metrics<br/>(version, supabase, cache)"]
+    E --> F["Get Circuit Breaker Status<br/>from all services"]
+    F --> G["Try to Get Recent Tasks<br/>(if supported)"]
+    G --> H["Return Comprehensive<br/>Metrics JSON"]
+
+    G -->|Error| I[Log Error and<br/>Continue without Recent Tasks]
+    I --> H
+```
+
+### GET /ready
+
+Comprehensive readiness check for Cloud Run deployment.
+
+```mermaid
+graph TD
+    A[Client Request] --> B[GET /ready]
+    B --> C["Initialize Checks Dictionary"]
+    C --> D["Test Supabase Connectivity<br/>via digest_tasks table"]
+    D --> E{Supabase Healthy?}
+    E -->|Yes| F["Mark supabase: healthy"]
+    E -->|No| G["Mark supabase: unhealthy<br/>with error details"]
+
+    F --> H["Check Circuit Breakers<br/>Availability"]
+    G --> H
+    H --> I{Circuit Breakers Available?}
+    I -->|Yes| J["Mark circuit_breakers: healthy"]
+    I -->|No| K["Mark circuit_breakers: not_configured"]
+
+    J --> L{All Checks Passed?}
+    K --> L
+    L -->|Yes| M["Return 200 Ready<br/>with all check results"]
+    L -->|No| N["Return 503 Not Ready<br/>with failed check details"]
+```
+
+### GET /digest-status/health
+
+Alternative health check endpoint for backward compatibility.
+
+```mermaid
+graph TD
+    A[Client Request] --> B["GET /digest-status/health"]
+    B --> C["Return JSON Response<br/>{status: 'healthy', version: '2.1.0'}"]
+```
+
 ### Core Workflow
 
 #### Option 1: Direct Digest Generation
+
 1. **Submit a digest request** → Get task ID immediately
 2. **Poll for status** → Track progress and get results
 3. **Optional webhooks** → Receive notifications when complete
 
 #### Option 2: Two-Phase Operation (Recommended for batch processing)
+
 1. **Fetch sources daily** → Pre-fetch content for a specific date
 2. **Generate digests** → Use pre-fetched sources for faster generation
 3. **Poll for status** → Track progress and get results
@@ -262,15 +467,15 @@ curl -X POST http://localhost:8000/generate-digest \
 
 #### Request Parameters
 
-| Parameter        | Type    | Required | Description                                           |
-| ---------------- | ------- | -------- | ----------------------------------------------------- |
-| `user_info`      | Object  | Yes      | User profile with name, title, goals, news_interest  |
-| `source_date`    | String  | No       | Use pre-fetched sources from this date (YYYY-MM-DD)  |
-| `target_date`    | String  | No       | Target date for content if fetching (YYYY-MM-DD)     |
-| `top_n_articles` | Integer | No       | Number of papers to include (default: 5)             |
-| `top_n_news`     | Integer | No       | Number of news articles to include (default: 5)      |
-| `digest_sources` | Object  | No       | Control which sources to include in digest           |
-| `callback_url`   | String  | No       | Webhook URL for completion notification              |
+| Parameter        | Type    | Required | Description                                         |
+| ---------------- | ------- | -------- | --------------------------------------------------- |
+| `user_info`      | Object  | Yes      | User profile with name, title, goals, news_interest |
+| `source_date`    | String  | No       | Use pre-fetched sources from this date (YYYY-MM-DD) |
+| `target_date`    | String  | No       | Target date for content if fetching (YYYY-MM-DD)    |
+| `top_n_articles` | Integer | No       | Number of papers to include (default: 5)            |
+| `top_n_news`     | Integer | No       | Number of news articles to include (default: 5)     |
+| `digest_sources` | Object  | No       | Control which sources to include in digest          |
+| `callback_url`   | String  | No       | Webhook URL for completion notification             |
 
 #### Digest Sources Control
 
