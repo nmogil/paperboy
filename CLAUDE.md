@@ -36,6 +36,20 @@ export SUPABASE_KEY=your-supabase-key
 gcloud builds submit
 ```
 
+### Re-deploying Locally via Docker
+
+```bash
+# Stop existing containers
+docker-compose down
+
+# Rebuild and start fresh containers
+docker-compose up --build
+
+# If you want to remove existing volumes and start completely clean
+docker-compose down --volumes
+docker-compose up --build
+```
+
 ### Testing
 
 ```bash

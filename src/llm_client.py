@@ -131,7 +131,7 @@ class LLMClient:
                 model=self.model,
                 instructions=system_prompt,
                 input=user_prompt,
-                text_format=response_model,
+                response_format=response_model,
                 temperature=temperature
             )
             
@@ -881,13 +881,42 @@ Content:
             # Missing HTML wrapper, add it
             return f"<html>\n{response}\n</html>"
 
+    def _fix_date_in_html(self, html: str, correct_date: str) -> str:
+        """Fix any incorrect dates in the HTML with the correct current date."""
+        import re
+        
+        if not html:
+            return html
+            
+        # Pattern to match dates in the format: "Day, Month DD, YYYY"
+        # This will match dates like "Saturday, June 10, 2023" or "Thursday, June 12, 2025"
+        date_pattern = r'<div class="date">([^<]+)</div>'
+        
+        # Replace the date in the date div
+        html = re.sub(date_pattern, f'<div class="date">{correct_date}</div>', html)
+        
+        # Also fix the title if needed
+        title_pattern = r'<title>Your Research Digest - ([^<]+)</title>'
+        html = re.sub(title_pattern, f'<title>Your Research Digest - {correct_date}</title>', html)
+        
+        # Log if we had to fix the date
+        if correct_date not in html:
+            logfire.warning(f"LLM generated incorrect date, fixed to: {correct_date}")
+        
+        return html
+
     async def create_final_digest(
         self,
         summaries: List[Dict[str, Any]],
         user_info: Dict[str, Any]
     ) -> str:
         """Create final HTML digest from individual summaries."""
-        system_prompt = """You are creating a personalized research digest in the EXACT format of Paperboy Digest.
+        # Generate the current date in the required format
+        current_date = datetime.now().strftime('%A, %B %d, %Y')
+        
+        system_prompt = f"""IMPORTANT: Today's date is {current_date}. You MUST use this exact date in the digest.
+
+You are creating a personalized research digest in the EXACT format of Paperboy Digest.
 
 CRITICAL: You MUST follow this EXACT HTML template structure. Do not deviate from this format:
 
@@ -896,7 +925,7 @@ CRITICAL: You MUST follow this EXACT HTML template structure. Do not deviate fro
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your Research Digest - [CURRENT_DATE_FORMATTED]</title>
+    <title>Your Research Digest - {current_date}</title>
     <style>
         body {
             font-family: Georgia, Times, serif;
@@ -1038,9 +1067,9 @@ CRITICAL: You MUST follow this EXACT HTML template structure. Do not deviate fro
 <body>
     <div class="header">
         <h1>📰 PAPERBOY DIGEST</h1>
-        <div class="date">[CURRENT_DATE - format as: Monday, June 09, 2025]</div>
+        <div class="date">{current_date}</div>
         <div class="subtitle">Personalized for [USER_NAME], [USER_TITLE]</div>
-        <div class="stats">[PAPER_COUNT] Papers • [NEWS_COUNT] News Articles • [READING_TIME] min read</div>
+        <div class="stats">[PAPER_COUNT] Papers • [NEWS_COUNT] News Articles • [ESTIMATED_READING_TIME] min read</div>
     </div>
 
     <div class="section">
@@ -1103,7 +1132,7 @@ INSTRUCTIONS:
 1. Use EXACTLY this HTML structure - do not add or remove any sections
 2. Replace all [PLACEHOLDERS] with actual data from the summaries
 3. Calculate stats: papers processed = total articles * 4, time saved = total articles * 15
-4. Format the current date as shown (e.g., "Monday, June 09, 2025")
+4. The current date "{current_date}" has already been inserted in the template above - DO NOT CHANGE IT
 5. Categorize by score: 80-100 (DIRECTLY RELEVANT), 60-79 (EXPAND KNOWLEDGE), <60 (QUICK SCAN)
 6. Use "CRITICAL" for scores 90-100, "IMPORTANT" for scores 80-89, "NOTEWORTHY" for scores 60-79
 7. MUST include the 📰 emoji in the header
@@ -1128,7 +1157,9 @@ INSTRUCTIONS:
         papers_serializable = [make_serializable(paper) for paper in papers]
         news_serializable = [make_serializable(article) for article in news]
 
-        user_prompt = f"""User Profile:
+        user_prompt = f"""CRITICAL: Use exactly this date in your response: {current_date}
+
+User Profile:
 Name: {user_info.get('name', 'User')}
 Role: {user_info.get('title', 'Researcher')}
 Goals: {user_info.get('goals', 'AI Research')}
@@ -1151,6 +1182,9 @@ Create a cohesive HTML digest that tells a story about what's important for this
             
             # Clean and validate HTML response
             cleaned_html = self._clean_html_response(response)
+            
+            # Post-process to ensure correct date
+            cleaned_html = self._fix_date_in_html(cleaned_html, current_date)
             
             if not cleaned_html:
                 logfire.warning("Empty HTML response from LLM, using fallback")
