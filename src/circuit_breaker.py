@@ -1,5 +1,5 @@
 """Circuit breaker pattern implementation for external service calls."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import asyncio
 from typing import Optional, Callable, Any, Dict
@@ -57,7 +57,14 @@ class CircuitBreaker:
                 self.state = CircuitState(data['state'])
                 self.failure_count = data.get('failure_count', 0)
                 if data.get('last_failure_at'):
-                    self.last_failure_time = datetime.fromisoformat(data['last_failure_at'].replace('Z', '+00:00'))
+                    # Ensure timezone-aware datetime from Supabase
+                    last_failure_str = data['last_failure_at']
+                    if 'Z' in last_failure_str:
+                        last_failure_str = last_failure_str.replace('Z', '+00:00')
+                    self.last_failure_time = datetime.fromisoformat(last_failure_str)
+                    # If still timezone-naive, assume UTC
+                    if self.last_failure_time.tzinfo is None:
+                        self.last_failure_time = self.last_failure_time.replace(tzinfo=timezone.utc)
                 
                 logfire.info("Loaded circuit breaker state for {name}: {state}", 
                            name=self.name, state=self.state.value)
@@ -75,7 +82,7 @@ class CircuitBreaker:
                 'state': self.state.value,
                 'failure_count': self.failure_count,
                 'last_failure_at': self.last_failure_time.isoformat() if self.last_failure_time else None,
-                'last_success_at': datetime.now().isoformat() if self.state == CircuitState.CLOSED else None
+                'last_success_at': datetime.now(timezone.utc).isoformat() if self.state == CircuitState.CLOSED else None
             }
             
             # Upsert state
@@ -105,7 +112,7 @@ class CircuitBreaker:
                     self.state = CircuitState.HALF_OPEN
                     logfire.info("Circuit breaker {name} entering HALF_OPEN state", name=self.name)
                 else:
-                    time_until_retry = self.recovery_timeout - (datetime.now() - self.last_failure_time).seconds
+                    time_until_retry = self.recovery_timeout - (datetime.now(timezone.utc) - self.last_failure_time).seconds
                     raise CircuitOpenError(
                         f"Circuit breaker {self.name} is OPEN. Retry in {time_until_retry} seconds"
                     )
@@ -127,7 +134,7 @@ class CircuitBreaker:
         """Check if enough time has passed to attempt reset."""
         return (
             self.last_failure_time is not None and
-            datetime.now() - self.last_failure_time > timedelta(seconds=self.recovery_timeout)
+            datetime.now(timezone.utc) - self.last_failure_time > timedelta(seconds=self.recovery_timeout)
         )
     
     async def _on_success(self) -> None:
@@ -146,7 +153,7 @@ class CircuitBreaker:
         """Handle failed call."""
         async with self._lock:
             self.failure_count += 1
-            self.last_failure_time = datetime.now()
+            self.last_failure_time = datetime.now(timezone.utc)
             
             if self.failure_count >= self.failure_threshold:
                 self.state = CircuitState.OPEN

@@ -72,17 +72,10 @@ class LLMClient:
                 temperature=temperature
             )
             
-            # Extract content from Responses API format
-            if response.output and len(response.output) > 0:
-                output_item = response.output[0]
-                if hasattr(output_item, 'content') and len(output_item.content) > 0:
-                    content = output_item.content[0].text
-                else:
-                    logfire.error("Unexpected response format: no content in output")
-                    raise ValueError("No content in response output")
-            else:
-                logfire.error("Unexpected response format: no output")
-                raise ValueError("No output in response")
+            # Extract content using output_text property (simplified)
+            content = response.output_text
+            if not content:
+                raise ValueError("Empty response from OpenAI")
 
             # Remove markdown code blocks if present
             if content.startswith("```json"):
@@ -124,23 +117,30 @@ class LLMClient:
         start_time = time.time()
         
         try:
-            # Try structured output with Responses API
-            logfire.info(f"Attempting structured output with model: {response_model.__name__}")
+            # Use Responses API with JSON schema instruction
+            combined_prompt = f"{system_prompt}\n\nYou must respond with valid JSON matching this schema: {response_model.model_json_schema()}\n\n{user_prompt}"
             
-            response = await self.client.responses.parse(
+            response = await self.client.responses.create(
                 model=self.model,
-                instructions=system_prompt,
-                input=user_prompt,
-                response_format=response_model,
+                input=combined_prompt,
                 temperature=temperature
             )
             
-            # Access the parsed Pydantic object directly
-            if hasattr(response, 'output_parsed') and response.output_parsed:
-                logfire.info(f"Successfully received structured output: {type(response.output_parsed)}")
-                return response.output_parsed
-            else:
-                raise ValueError("No parsed output in structured response")
+            # Get response text and parse JSON
+            json_text = response.output_text
+            if not json_text:
+                raise ValueError("Empty response from OpenAI")
+                
+            try:
+                # Parse JSON and validate with Pydantic model
+                json_data = json.loads(json_text)
+                parsed_content = response_model(**json_data)
+                logfire.info(f"Successfully received structured output: {type(parsed_content)}")
+                return parsed_content
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in response: {str(e)}")
+            except Exception as e:
+                raise ValueError(f"Pydantic validation failed: {str(e)}")
                 
         except Exception as e:
             logfire.warning(f"Structured output failed: {str(e)}")
@@ -184,6 +184,8 @@ class LLMClient:
         top_n: int
     ) -> List[RankedArticle]:
         """Rank articles based on user profile using structured outputs with complete article data."""
+        print(f"[RANKING DEBUG] Starting rank_articles with {len(articles)} articles, top_n={top_n}")
+        print(f"[RANKING DEBUG] User info: {user_info}")
         
         # Extract and structure user interests more comprehensively  
         primary_goals = user_info.get('goals', 'AI Research')
@@ -228,12 +230,14 @@ Articles:
 
         try:
             # Try structured output first
+            print(f"[RANKING DEBUG] Calling _call_llm_structured for ranking")
             response = await self._call_llm_structured(
                 system_prompt, 
                 user_prompt, 
                 RankingResponse,
                 temperature=0.3
             )
+            print(f"[RANKING DEBUG] Response type from _call_llm_structured: {type(response)}")
             
             if isinstance(response, RankingResponse):
                 # Successful structured output - articles are already complete
@@ -284,6 +288,9 @@ Articles:
                 return []
                 
         except Exception as e:
+            print(f"[RANKING DEBUG] rank_articles exception: {type(e).__name__}: {str(e)}")
+            import traceback
+            print(f"[RANKING DEBUG] Traceback:\n{traceback.format_exc()}")
             logfire.error(f"Structured ranking failed completely: {str(e)}")
             raise ValueError(f"Article ranking failed: {str(e)}")
 
@@ -456,6 +463,7 @@ News Articles:
         weight_recency: bool = True
     ) -> List[RankedArticle]:
         """Rank mixed content (papers and news) with type-aware scoring using structured outputs with complete content data."""
+        print(f"[RANKING DEBUG] Starting rank_mixed_content with {len(content)} items, top_n={top_n}")
         
         # Extract and structure user interests more comprehensively
         primary_goals = user_info.get('goals', 'AI Research')
@@ -527,12 +535,14 @@ Content items:
 
         try:
             # Try structured output first
+            print(f"[RANKING DEBUG] Calling _call_llm_structured for mixed content ranking")
             response = await self._call_llm_structured(
                 system_prompt, 
                 user_prompt, 
                 RankingResponse,
                 temperature=0.3
             )
+            print(f"[RANKING DEBUG] Mixed content response type: {type(response)}")
             
             if isinstance(response, RankingResponse):
                 # Successful structured output - content is already complete
@@ -591,8 +601,10 @@ Content items:
                 return []
                 
         except Exception as e:
+            print(f"[RANKING DEBUG] rank_mixed_content exception: {type(e).__name__}: {str(e)}")
             logfire.error(f"Mixed content structured ranking failed: {str(e)}")
             # Fallback to regular ranking
+            print(f"[RANKING DEBUG] Falling back to regular article ranking")
             logfire.info("Falling back to regular article ranking for mixed content")
             return await self.rank_articles(content, user_info, top_n)
 
@@ -855,7 +867,9 @@ Content:
 
     def _clean_html_response(self, response: str) -> str:
         """Clean and validate HTML response from LLM."""
+        print(f"[CLEAN HTML DEBUG] Input response type: {type(response)}, length: {len(response) if response else 0}")
         if not response or not response.strip():
+            print(f"[CLEAN HTML DEBUG] Response is empty or whitespace only")
             return ""
         
         # Remove any markdown code block artifacts
@@ -873,12 +887,15 @@ Content:
         # Check if HTML is properly wrapped
         if response.lower().startswith('<html'):
             # Already has HTML tags, don't double wrap
+            print(f"[CLEAN HTML DEBUG] Response already has <html> tags")
             return response
         elif response.lower().startswith('<!doctype'):
             # Has doctype, also good
+            print(f"[CLEAN HTML DEBUG] Response has <!doctype> declaration")
             return response
         else:
             # Missing HTML wrapper, add it
+            print(f"[CLEAN HTML DEBUG] Adding HTML wrapper to response")
             return f"<html>\n{response}\n</html>"
 
     def _fix_date_in_html(self, html: str, correct_date: str) -> str:
@@ -913,6 +930,8 @@ Content:
         """Create final HTML digest from individual summaries."""
         # Generate the current date in the required format
         current_date = datetime.now().strftime('%A, %B %d, %Y')
+        print(f"\n[DIGEST DEBUG] Starting create_final_digest with {len(summaries)} summaries")
+        print(f"[DIGEST DEBUG] Current date: {current_date}")
         
         system_prompt = f"""IMPORTANT: Today's date is {current_date}. You MUST use this exact date in the digest.
 
@@ -927,7 +946,7 @@ CRITICAL: You MUST follow this EXACT HTML template structure. Do not deviate fro
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Your Research Digest - {current_date}</title>
     <style>
-        body {
+        body {{
             font-family: Georgia, Times, serif;
             line-height: 1.6;
             color: #000000;
@@ -936,9 +955,9 @@ CRITICAL: You MUST follow this EXACT HTML template structure. Do not deviate fro
             padding: 20px;
             max-width: 600px;
             margin: 0 auto;
-        }
+        }}
         
-        h1 {
+        h1 {{
             font-size: 28px;
             font-weight: bold;
             margin: 0 0 5px 0;
@@ -946,122 +965,122 @@ CRITICAL: You MUST follow this EXACT HTML template structure. Do not deviate fro
             text-align: center;
             border-bottom: 3px solid #000000;
             padding-bottom: 10px;
-        }
+        }}
         
-        h2 {
+        h2 {{
             font-size: 18px;
             font-weight: bold;
             margin: 30px 0 15px 0;
             color: #000000;
             border-bottom: 1px solid #cccccc;
             padding-bottom: 5px;
-        }
+        }}
         
-        h3 {
+        h3 {{
             font-size: 16px;
             font-weight: bold;
             margin: 20px 0 10px 0;
             color: #000000;
-        }
+        }}
         
-        p {
+        p {{
             margin: 10px 0;
             font-size: 14px;
-        }
+        }}
         
-        .header {
+        .header {{
             text-align: center;
             margin-bottom: 30px;
             padding-bottom: 20px;
             border-bottom: 1px solid #000000;
-        }
+        }}
         
-        .date {
+        .date {{
             font-size: 12px;
             color: #666666;
             margin: 5px 0;
-        }
+        }}
         
-        .subtitle {
+        .subtitle {{
             font-size: 14px;
             color: #666666;
             margin: 10px 0;
-        }
+        }}
         
-        .stats {
+        .stats {{
             font-size: 12px;
             color: #666666;
             margin: 15px 0;
-        }
+        }}
         
-        .article {
+        .article {{
             margin: 25px 0;
             padding: 15px 0;
             border-bottom: 1px solid #eeeeee;
-        }
+        }}
         
-        .article-title {
+        .article-title {{
             font-size: 16px;
             font-weight: bold;
             margin: 0 0 8px 0;
             color: #000000;
-        }
+        }}
         
-        .article-meta {
+        .article-meta {{
             font-size: 11px;
             color: #666666;
             margin: 5px 0;
-        }
+        }}
         
-        .summary {
+        .summary {{
             font-size: 14px;
             margin: 10px 0;
             color: #333333;
-        }
+        }}
         
-        .relevance {
+        .relevance {{
             font-size: 13px;
             margin: 10px 0;
             padding: 10px;
             background-color: #f9f9f9;
             border-left: 3px solid #cccccc;
-        }
+        }}
         
-        .actions {
+        .actions {{
             margin: 15px 0;
-        }
+        }}
         
-        .actions a {
+        .actions a {{
             color: #000000;
             text-decoration: underline;
             font-size: 13px;
             margin-right: 15px;
-        }
+        }}
         
-        .section {
+        .section {{
             margin: 30px 0;
-        }
+        }}
         
-        .quick-item {
+        .quick-item {{
             margin: 8px 0;
             font-size: 13px;
             padding: 5px 0;
-        }
+        }}
         
-        .footer {
+        .footer {{
             margin-top: 40px;
             padding-top: 20px;
             border-top: 1px solid #cccccc;
             text-align: center;
             font-size: 12px;
             color: #666666;
-        }
+        }}
         
-        .score {
+        .score {{
             font-size: 11px;
             color: #666666;
             font-weight: normal;
-        }
+        }}
     </style>
 </head>
 <body>
@@ -1136,11 +1155,22 @@ INSTRUCTIONS:
 5. Categorize by score: 80-100 (DIRECTLY RELEVANT), 60-79 (EXPAND KNOWLEDGE), <60 (QUICK SCAN)
 6. Use "CRITICAL" for scores 90-100, "IMPORTANT" for scores 80-89, "NOTEWORTHY" for scores 60-79
 7. MUST include the 📰 emoji in the header
-8. Return ONLY the HTML - no markdown blocks, no explanations"""
+8. Return ONLY the HTML - no markdown blocks, no explanations
+
+CRITICAL REQUIREMENT: You MUST include BOTH research papers AND news articles in the digest:
+- Include ALL items from both "Research Papers" and "Industry News" provided in the input
+- For each article, use "RESEARCH" for papers and "NEWS" for news articles in the article-meta div
+- Mix papers and news within each relevance category based on their scores
+- Do NOT separate papers and news into different sections - integrate them by relevance score
+- If you receive 5 papers and 5 news articles, the digest MUST contain all 10 items"""
 
         # Separate papers and news
         papers = [s for s in summaries if s.get('type') == 'paper']
         news = [s for s in summaries if s.get('type') == 'news']
+        
+        print(f"[DIGEST DEBUG] Papers: {len(papers)}, News: {len(news)}")
+        if news:
+            print(f"[DIGEST DEBUG] First news item: {news[0].get('title', 'Unknown')} - Score: {news[0].get('relevance_score', 0)}")
         
         # Sort by relevance
         papers.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
@@ -1173,25 +1203,38 @@ Industry News ({len(news)} items):
 Create a cohesive HTML digest that tells a story about what's important for this user today."""
 
         try:
+            print(f"[DIGEST DEBUG] Calling LLM with {len(system_prompt)} char system prompt and {len(user_prompt)} char user prompt")
             response = await self._call_llm(
                 system_prompt, 
                 user_prompt, 
                 temperature=0.7, 
                 max_tokens=6000
             )
+            print(f"[DIGEST DEBUG] LLM response received, length: {len(response) if response else 0} chars")
+            print(f"[DIGEST DEBUG] First 200 chars of response: {response[:200] if response else 'EMPTY'}")
             
             # Clean and validate HTML response
+            print(f"[DIGEST DEBUG] Cleaning HTML response...")
             cleaned_html = self._clean_html_response(response)
+            print(f"[DIGEST DEBUG] Cleaned HTML length: {len(cleaned_html) if cleaned_html else 0} chars")
+            print(f"[DIGEST DEBUG] Cleaned HTML is {'EMPTY' if not cleaned_html else 'NOT EMPTY'}")
             
             # Post-process to ensure correct date
+            print(f"[DIGEST DEBUG] Fixing date in HTML...")
             cleaned_html = self._fix_date_in_html(cleaned_html, current_date)
             
             if not cleaned_html:
+                print(f"[DIGEST DEBUG] FALLBACK TRIGGERED: Empty HTML response after cleaning")
                 logfire.warning("Empty HTML response from LLM, using fallback")
                 return self._create_fallback_html(summaries, user_info)
+            
+            print(f"[DIGEST DEBUG] SUCCESS: Returning cleaned HTML digest")
                 
             return cleaned_html
         except Exception as e:
+            print(f"[DIGEST DEBUG] FALLBACK TRIGGERED: Exception during digest creation: {type(e).__name__}: {str(e)}")
+            import traceback
+            print(f"[DIGEST DEBUG] Traceback: {traceback.format_exc()}")
             logfire.error(f"Failed to create final digest: {str(e)}")
             # Return enhanced fallback HTML on failure
             return self._create_fallback_html(summaries, user_info)
