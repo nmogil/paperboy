@@ -15,14 +15,13 @@ primary_region = "ord"  # Change to your preferred region
   min_machines_running = 0  # Scale to zero when idle to save costs
   processes = ["app"]
 
-  # Health check using existing endpoint (every 4 hours to minimize logs)
-  [[http_service.checks]]
-    grace_period = "10s"
-    interval = "4h"
-    method = "GET"
-    path = "/digest-status/health"
-    headers = { "X-API-Key" = "health_check" }
-    timeout = "5s"
+  # Health check disabled during initial deployment
+  # [[http_service.checks]]
+  #   grace_period = "30s"
+  #   interval = "60s"
+  #   method = "GET"
+  #   path = "/digest-status/health"
+  #   timeout = "10s"
 
 [[vm]]
   memory = "4gb"
