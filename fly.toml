@@ -1,0 +1,63 @@
+# Fly.io configuration for Paperboy AI
+# Deploy with: fly deploy
+
+app = "paperboy-ai"
+primary_region = "ord"  # Change to your preferred region
+
+[build]
+  # Uses the existing Dockerfile
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0  # Scale to zero when idle to save costs
+  processes = ["app"]
+
+  # Health check using existing endpoint
+  [http_service.checks]
+    [http_service.checks.health]
+      grace_period = "10s"
+      interval = "30s"
+      method = "GET"
+      path = "/digest-status/health"
+      headers = { "X-API-Key" = "health_check" }
+      timeout = "5s"
+
+[[vm]]
+  memory = "4gb"
+  cpu_kind = "shared"
+  cpus = 2
+
+# Environment variables (non-sensitive)
+[env]
+  USE_LIGHTWEIGHT = "true"
+  USE_SUPABASE = "true"
+  NEWS_ENABLED = "true"
+  LOG_LEVEL = "INFO"
+  OPENAI_MODEL = "gpt-4o-mini"
+  TOP_N_ARTICLES = "5"
+  TOP_N_NEWS = "5"
+  TASK_TIMEOUT = "600"
+  HTTP_TIMEOUT = "60"
+  NEWS_MAX_ARTICLES = "50"
+  NEWS_MAX_EXTRACT = "10"
+
+# Optional: Persistent volume for data storage
+# Uncomment if you want persistent local storage
+# [mounts]
+#   destination = "/app/data"
+#   source = "paperboy_data"
+
+# Secrets to set via: fly secrets set KEY=value
+# Required secrets:
+# - OPENAI_API_KEY
+# - API_KEY (for authentication)
+# - SUPABASE_URL
+# - SUPABASE_KEY
+# 
+# Optional secrets (for news functionality):
+# - NEWSAPI_KEY
+# - TAVILY_API_KEY
+# - LOGFIRE_TOKEN
